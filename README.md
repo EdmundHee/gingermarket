@@ -15,7 +15,6 @@ Add this marketplace to Claude Code:
 | Plugin | Description | Install |
 |---|---|---|
 | **ralph-helper** | Plan-aware orchestrator for ralph-loop with automatic phase execution, test gating, and rollback | `/plugin install ralph-helper@gingermarket` |
-| **codemap-cli** | Static analysis codemap — pre-indexes codebase structure, call graphs, and relationships for AI-assisted development | `/plugin install codemap-cli@gingermarket` |
 
 ## Adding Plugins
 

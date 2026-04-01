@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "codemap": {
-      "command": "codemap-mcp",
-      "args": ["."],
-      "env": {}
-    }
-  }
-}

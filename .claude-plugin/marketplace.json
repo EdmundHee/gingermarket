@@ -8,11 +8,6 @@
       "name": "ralph-helper",
       "source": "./ralph-helper",
       "description": "Plan-aware orchestrator for ralph-loop. Reads a plan, decomposes it into phases, injects unit tests, drives execution automatically with test gating, rollback, and regression checks."
-    },
-    {
-      "name": "codemap-cli",
-      "source": "./codemap-cli",
-      "description": "Static analysis codemap for AI-assisted development. Pre-indexes your codebase structure, call graphs, and relationships so Claude Code can answer architecture questions in a single tool call."
     }
   ]
 }
