@@ -1,4 +1,4 @@
-# gingerdev
+# gingermarket
 
 A Claude Code plugin marketplace by Edmund Hee.
 
@@ -7,14 +7,14 @@ A Claude Code plugin marketplace by Edmund Hee.
 Add this marketplace to Claude Code:
 
 ```bash
-/plugin marketplace add EdmundHee/gingerdev
+/plugin marketplace add EdmundHee/gingermarket
 ```
 
 ## Available Plugins
 
 | Plugin | Description | Install |
 |---|---|---|
-| **ralph-helper** | Plan-aware orchestrator for ralph-loop with automatic phase execution, test gating, and rollback | `/plugin install ralph-helper@gingerdev` |
+| **ralph-helper** | Plan-aware orchestrator for ralph-loop with automatic phase execution, test gating, and rollback | `/plugin install ralph-helper@gingermarket` |
 
 ## Adding Plugins
 
