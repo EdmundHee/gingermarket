@@ -1,0 +1,13 @@
+{
+  "name": "gingerdev",
+  "owner": {
+    "name": "Edmund Hee"
+  },
+  "plugins": [
+    {
+      "name": "ralph-helper",
+      "source": "./ralph-helper",
+      "description": "Plan-aware orchestrator for ralph-loop. Reads a plan, decomposes it into phases, injects unit tests, drives execution automatically with test gating, rollback, and regression checks."
+    }
+  ]
+}
