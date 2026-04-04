@@ -3,7 +3,7 @@ description: Analyze a plan, confirm phases, then execute all phases automatical
 argument-hint: <plan-path>
 ---
 
-You are ralph-helper's main orchestrator. The user has given you a plan file at `$ARGUMENTS`. Your job is to read it, break it into executable phases with unit tests, get confirmation, and then drive the entire build automatically using ralph-loop.
+You are ralph-helper's main orchestrator. The user has given you a plan file at `$ARGUMENTS`. If this is a pre-analyzed plan (from `/ralph-helper:analyze`), trust its structure and skip redundant decomposition. Otherwise, read it, break it into executable phases with unit tests, get confirmation, and drive the entire build automatically using ralph-loop.
 
 ## STEP 1: READ AND UNDERSTAND
 
@@ -16,7 +16,26 @@ Read the plan file at `$ARGUMENTS`. Also read the codebase:
 
 If the plan file does not exist, tell the user and stop.
 
+## STEP 1.5: DETECT PRE-ANALYZED PLAN
+
+After reading the plan, determine if it is a pre-analyzed plan from `/ralph-helper:analyze`. A plan is considered pre-analyzed if:
+
+1. The filename contains `-ralph-helper` (e.g., `my-feature-ralph-helper.md`), **OR**
+2. The plan has `## Phase` headings where every phase contains both a `### Tests` subsection and a `### Done When` subsection
+
+If the plan IS pre-analyzed:
+- Trust the phase structure exactly as written. Do not re-decompose, re-number, or modify the phases.
+- Skip STEP 2 (Decompose into Phases) entirely.
+- Skip STEP 3 (Ensure Every Phase Has Tests) entirely — the tests are already defined.
+- Skip STEP 4 (Estimate Iterations) — instead, estimate iterations inline during STEP 5 presentation.
+- Proceed directly to STEP 5 (Present for Confirmation) with the phases as defined in the file.
+
+If the plan is NOT pre-analyzed:
+- Proceed through all steps normally (STEP 2 through STEP 7 unchanged).
+
 ## STEP 2: DECOMPOSE INTO PHASES
+
+*Skip this step if the plan was detected as pre-analyzed in Step 1.5.*
 
 If the plan already has `## Phase` headings, use them as the phase boundaries. Read the `### Tests` and `### Done When` subsections if present.
 
@@ -27,6 +46,8 @@ If the plan is flat (no phase headings), reason about:
 - **Size**: Each phase should be achievable in roughly 3-8 ralph-loop iterations. If a phase looks like it needs more than 10, suggest splitting it.
 
 ## STEP 3: ENSURE EVERY PHASE HAS TESTS
+
+*Skip this step if the plan was detected as pre-analyzed in Step 1.5.*
 
 This is non-negotiable. For each phase:
 
@@ -41,6 +62,8 @@ Base your test decisions on the project's language, framework, and existing test
 
 ## STEP 4: ESTIMATE ITERATIONS
 
+*Skip this step if the plan was detected as pre-analyzed in Step 1.5. Iteration estimates will be determined inline during Step 5.*
+
 For each phase, reason about how many ralph-loop iterations it will likely need:
 
 - How many files or components need to be created/modified?
@@ -52,7 +75,9 @@ General guidance: default around 5, cap at 10.
 
 ## STEP 5: PRESENT FOR CONFIRMATION
 
-Present the phase breakdown to the user clearly:
+Present the phase breakdown to the user clearly.
+
+If this is a pre-analyzed plan, note to the user: "This plan was pre-analyzed by `/ralph-helper:analyze`. Phase structure, tests, and completion criteria are used as-is." Then present each phase with its tests and criteria from the file, plus inline iteration estimates.
 
 For each phase, show:
 - Phase name and description

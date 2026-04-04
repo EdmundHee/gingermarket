@@ -59,26 +59,28 @@ All endpoints respond correctly, all tests pass.
 
 **Flat** — Just describe what you want. ralph-helper will analyze it and suggest a phase breakdown for your review.
 
-### 2. Preview the Breakdown (Optional)
+### 2. Analyze the Plan
 
-Before executing, you can preview how ralph-helper will decompose your plan:
+Before executing, run analyze to get a well-structured, ready-to-execute plan:
 
 ```
 /ralph-helper:analyze ./plans/user-auth.md
 ```
 
-This shows you the phase breakdown, injected tests, and iteration estimates without executing anything. Use this to refine your plan before committing to a full run.
+This produces `./plans/user-auth-ralph-helper.md` — a structured plan with properly sized phases (large phases are auto-split), tests, and completion criteria. Review it and revise if needed.
 
 ### 3. Execute the Plan
 
 ```
-/ralph-helper:go ./plans/user-auth.md
+/ralph-helper:go ./plans/user-auth-ralph-helper.md
 ```
+
+If using a pre-analyzed plan (from step 2), ralph-helper trusts the phase structure and skips redundant decomposition. You can also pass an unanalyzed plan directly — ralph-helper will decompose it itself.
 
 ralph-helper will:
 
 1. Read your plan and the codebase (language, test framework, existing patterns)
-2. Decompose the plan into phases with tests for each
+2. Decompose the plan into phases with tests for each (skipped if pre-analyzed)
 3. Present the breakdown and ask for your confirmation — **this is the only human touchpoint**
 4. After you confirm, execute each phase automatically:
    - Create a git tag at the start of each phase
@@ -133,7 +135,7 @@ Runs all tests across completed phases, reports results per phase, and flags any
 | Command | Description |
 |---|---|
 | `/ralph-helper:go <plan-path>` | Analyze plan, confirm phases, then execute all phases automatically |
-| `/ralph-helper:analyze <plan-path>` | Analyze plan and suggest phase breakdown without executing |
+| `/ralph-helper:analyze <plan-path>` | Analyze plan, auto-split large phases, write a `-ralph-helper.md` plan file |
 | `/ralph-helper:resume <plan-path>` | Resume from last completed phase |
 | `/ralph-helper:status <plan-path>` | Show current progress |
 | `/ralph-helper:phase <plan-path> <N>` | Run only a specific phase |
