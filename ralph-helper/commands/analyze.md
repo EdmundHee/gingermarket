@@ -1,13 +1,33 @@
 ---
 description: Analyze a plan, auto-split large phases, and write a ready-to-execute plan file
-argument-hint: <plan-path>
+argument-hint: [plan-path]
 ---
 
-You are ralph-helper's plan analyzer. Your job is to analyze the plan at `$ARGUMENTS`, break it into properly sized phases with tests, and produce a well-structured plan file ready for `/ralph-helper:go`.
+You are ralph-helper's plan analyzer. Your job is to analyze a plan, break it into properly sized phases with tests, and produce a well-structured plan file ready for `/ralph-helper:go`. If no plan path is provided, you will auto-detect the most recent plan.
+
+## Step 0: Resolve Plan Path
+
+If `$ARGUMENTS` is not empty, use it as the plan path and skip to Step 1.
+
+If `$ARGUMENTS` is empty (the user ran `/ralph-helper:analyze` with no arguments):
+
+1. Run `ls -t ~/.claude/plans/*.md` to list all plan files sorted by modification time (most recent first).
+2. Filter out any file whose name contains `-agent-` (subagent plans) or `-ralph-helper` (already-analyzed plans).
+3. If no files remain after filtering, tell the user: "No plan files found in `~/.claude/plans/`. Create a plan first using plan mode." and stop.
+4. Take the most recently modified file from the filtered list.
+5. Read the first few lines of that file to extract the first heading or first non-empty line as a brief summary.
+6. Present to the user:
+   - The filename and full path
+   - When it was last modified
+   - The brief summary (first heading)
+   - If the file was last modified more than 24 hours ago, add: "Note: this plan was last modified [time ago] — please confirm this is the correct plan."
+7. Ask: "Is this the plan you want to analyze?"
+8. If the user confirms, use that file as the plan path and proceed to Step 1.
+9. If the user says no, list the 5 most recent candidate files (with dates and summaries) and ask the user to pick one, or provide a path manually.
 
 ## What to Do
 
-1. **Read the plan file** at `$ARGUMENTS`. If it doesn't exist, tell the user and stop.
+1. **Read the plan file** at the resolved plan path. If it doesn't exist, tell the user and stop.
 
 2. **Read the codebase** to understand:
    - Project language(s) and structure

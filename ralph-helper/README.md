@@ -64,12 +64,24 @@ All endpoints respond correctly, all tests pass.
 Before executing, run analyze to get a well-structured, ready-to-execute plan:
 
 ```
+/ralph-helper:analyze
+```
+
+ralph-helper auto-detects the most recent plan in `~/.claude/plans/` and confirms with you before proceeding. You can also pass a path explicitly:
+
+```
 /ralph-helper:analyze ./plans/user-auth.md
 ```
 
 This produces `./plans/user-auth-ralph-helper.md` — a structured plan with properly sized phases (large phases are auto-split), tests, and completion criteria. Review it and revise if needed.
 
 ### 3. Execute the Plan
+
+```
+/ralph-helper:go
+```
+
+Auto-detects the most recent plan (preferring a pre-analyzed `-ralph-helper` variant if one exists). Or pass a path explicitly:
 
 ```
 /ralph-helper:go ./plans/user-auth-ralph-helper.md
@@ -134,12 +146,14 @@ Runs all tests across completed phases, reports results per phase, and flags any
 
 | Command | Description |
 |---|---|
-| `/ralph-helper:go <plan-path>` | Analyze plan, confirm phases, then execute all phases automatically |
-| `/ralph-helper:analyze <plan-path>` | Analyze plan, auto-split large phases, write a `-ralph-helper.md` plan file |
-| `/ralph-helper:resume <plan-path>` | Resume from last completed phase |
-| `/ralph-helper:status <plan-path>` | Show current progress |
-| `/ralph-helper:phase <plan-path> <N>` | Run only a specific phase |
-| `/ralph-helper:test <plan-path>` | Run all tests across completed phases |
+| `/ralph-helper:go [plan-path]` | Analyze plan, confirm phases, then execute all phases automatically |
+| `/ralph-helper:analyze [plan-path]` | Analyze plan, auto-split large phases, write a `-ralph-helper.md` plan file |
+| `/ralph-helper:resume [plan-path]` | Resume from last completed phase |
+| `/ralph-helper:status [plan-path]` | Show current progress |
+| `/ralph-helper:phase [plan-path] <N>` | Run only a specific phase |
+| `/ralph-helper:test [plan-path]` | Run all tests across completed phases |
+
+All commands auto-detect the most recent plan in `~/.claude/plans/` when no path is provided. For `resume`, `status`, `test`, and `phase`, auto-detection prefers plans with existing progress logs. For `go`, it prefers a pre-analyzed (`-ralph-helper`) variant if one exists.
 
 ## Key Behaviors
 

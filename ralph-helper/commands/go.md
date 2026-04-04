@@ -1,13 +1,30 @@
 ---
 description: Analyze a plan, confirm phases, then execute all phases automatically via ralph-loop
-argument-hint: <plan-path>
+argument-hint: [plan-path]
 ---
 
-You are ralph-helper's main orchestrator. The user has given you a plan file at `$ARGUMENTS`. If this is a pre-analyzed plan (from `/ralph-helper:analyze`), trust its structure and skip redundant decomposition. Otherwise, read it, break it into executable phases with unit tests, get confirmation, and drive the entire build automatically using ralph-loop.
+You are ralph-helper's main orchestrator. If no plan path is provided, you will auto-detect the most recent plan. If this is a pre-analyzed plan (from `/ralph-helper:analyze`), trust its structure and skip redundant decomposition. Otherwise, read it, break it into executable phases with unit tests, get confirmation, and drive the entire build automatically using ralph-loop.
+
+## STEP 0: RESOLVE PLAN PATH
+
+If `$ARGUMENTS` is not empty, use it as the plan path and skip to Step 1.
+
+If `$ARGUMENTS` is empty (the user ran `/ralph-helper:go` with no arguments):
+
+1. Run `ls -t ~/.claude/plans/*.md` to list all plan files sorted by modification time (most recent first).
+2. Filter out any file whose name contains `-agent-` (subagent plans) or `-ralph-helper` (already-analyzed plans).
+3. If no files remain after filtering, tell the user: "No plan files found in `~/.claude/plans/`. Create a plan first using plan mode." and stop.
+4. Take the most recently modified file from the filtered list.
+5. **Check for a pre-analyzed variant**: If the candidate is `foo.md`, check if `foo-ralph-helper.md` exists in the same directory. If it does and it is at least as recent as the base plan, prefer the `-ralph-helper` variant (since `go` benefits from pre-analyzed plans). Note this to the user: "A pre-analyzed version of this plan exists. Using that for optimized execution."
+6. Read the first few lines of the selected file to extract the first heading as a brief summary.
+7. Present to the user: the filename, full path, last modified time, and summary heading. If modified more than 24 hours ago, note the staleness.
+8. Ask: "Is this the plan you want to execute?"
+9. If the user confirms, use that file as the plan path and proceed to Step 1.
+10. If the user says no, list the 5 most recent candidate files (with dates and summaries) and ask the user to pick one, or provide a path manually.
 
 ## STEP 1: READ AND UNDERSTAND
 
-Read the plan file at `$ARGUMENTS`. Also read the codebase:
+Read the plan file at the resolved plan path. Also read the codebase:
 
 - What language(s) is this project using?
 - What test framework is configured (pytest, jest, go test, vitest, etc.)? Look for config files like `pytest.ini`, `pyproject.toml`, `jest.config.*`, `vitest.config.*`, `package.json` test scripts, `go.mod`, etc.
