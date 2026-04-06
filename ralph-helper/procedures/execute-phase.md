@@ -1,0 +1,86 @@
+# Procedure: Execute a Single Phase
+
+This is a shared procedure called by ralph-helper commands. It executes one phase of a plan using ralph-loop.
+
+The calling command MUST provide these inputs before invoking this procedure:
+- **Plan name**: Derived from the plan filename (e.g., `user-auth`)
+- **Phase number**: Which phase to execute (e.g., `2`)
+- **Phase objectives**: What this phase needs to accomplish
+- **Test requirements**: Specific tests that must pass (current phase + regression)
+- **Iteration estimate**: How many ralph-loop iterations to allow
+- **Completion criteria**: Concrete conditions for phase completion
+- **Previous phases**: Which phases are complete and what they produced
+
+---
+
+## 6a. Prepare the Phase
+
+- Create a git tag: `ralph-helper/<plan-name>/phase-<N>-start`
+- Create or update `./logs/<plan-name>/PROGRESS.md` marking this phase as in-progress
+- Create or update `./logs/<plan-name>/ralph-helper.json` with the phase state
+
+## 6b. Compose the ralph-loop Prompt
+
+Read the plan, the codebase state, and PROGRESS.md. Then compose a prompt for ralph-loop that includes:
+
+1. **Context**: What has already been built in previous phases. Reference PROGRESS.md and the actual codebase state. Mention which phases are complete and what they produced.
+
+2. **Objectives**: What this phase needs to accomplish, drawn directly from the plan.
+
+3. **Test requirements**: The specific tests that must be written and pass. Include both the plan's tests and any determined to be needed. Be explicit about test names and what they verify. Also state that ALL previous phases' tests must continue to pass.
+
+4. **Boundaries**: What files and modules from previous phases should NOT be modified. Determine this from the git tags and understanding of what was built.
+
+5. **Completion criteria**: The concrete conditions under which this phase is done. This should map to testable, verifiable outcomes.
+
+## 6c. Determine ralph-loop Parameters
+
+- `--max-iterations`: Based on the provided iteration estimate
+- `--completion-promise`: Derive from the completion criteria. It should be a concrete, checkable statement like "All tests pass including regression tests from previous phases, and PROGRESS.md is updated with phase completion status."
+
+## 6d. Invoke ralph-loop
+
+Run:
+```
+/ralph-loop:ralph-loop PROMPT --max-iterations N --completion-promise "TEXT"
+```
+
+Where PROMPT is the full prompt composed in 6b.
+
+## 6e. Verify the Phase
+
+After ralph-loop completes:
+
+1. **Run ALL tests** — current phase's tests AND all previous phases' tests. Use the detected test framework.
+2. **Read the test output** and reason about whether everything truly passes.
+3. **Check PROGRESS.md** — did ralph-loop update it appropriately?
+
+## 6f. Gate Decision
+
+**If all tests pass (current + regression)**:
+- Create git tag: `ralph-helper/<plan-name>/phase-<N>-done`
+- Update `./logs/<plan-name>/PROGRESS.md` with phase completion (iterations used, tests passing, git tag, duration)
+- Update `./logs/<plan-name>/ralph-helper.json` with phase status
+- Return success to the calling command
+
+**If tests fail**:
+- Run `git reset --hard ralph-helper/<plan-name>/phase-<N>-start` to rollback
+- Read the test failure output carefully
+- Reason about what went wrong — was it a logic error, a missing dependency, a regression?
+- Compose a **new retry prompt** that includes:
+  - Everything from the original prompt
+  - The specific test failures and error messages
+  - Analysis of what likely went wrong
+  - Guidance on a different approach if the original approach seems flawed
+- Retry the phase (invoke ralph-loop again with the adjusted prompt)
+- Allow up to **2 retries** per phase (3 total attempts)
+
+**If still failing after all retries**:
+- Stop execution
+- Update PROGRESS.md with the failure details
+- Report to the calling command:
+  - Which phase failed
+  - What tests are failing and why
+  - What was tried
+  - The git tag to reset to
+  - Whether the phase needs restructuring or the plan needs revision

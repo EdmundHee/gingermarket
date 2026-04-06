@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "ralph-helper",
-      "version": "0.1.3",
+      "version": "0.2.0",
       "source": "./ralph-helper",
       "description": "Plan-aware orchestrator for ralph-loop. Reads a plan, decomposes it into phases, injects unit tests, drives execution automatically with test gating, rollback, and regression checks."
     }

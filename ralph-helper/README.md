@@ -155,6 +155,22 @@ Runs all tests across completed phases, reports results per phase, and flags any
 
 All commands auto-detect the most recent plan in `~/.claude/plans/` when no path is provided. For `resume`, `status`, `test`, and `phase`, auto-detection prefers plans with existing progress logs. For `go`, it prefers a pre-analyzed (`-ralph-helper`) variant if one exists.
 
+## Plugin Structure
+
+```
+ralph-helper/
+  commands/       # User-facing commands (go, analyze, resume, status, phase, test)
+  procedures/     # Shared reusable procedures referenced by commands
+  templates/      # Plan template for users
+  .claude-plugin/ # Plugin metadata
+```
+
+Commands delegate shared logic to procedure files in `procedures/`:
+- `resolve-plan.md` — Plan path auto-detection and user confirmation
+- `detect-test-framework.md` — Test framework and pattern detection
+- `execute-phase.md` — Single-phase execution (git tag, ralph-loop, test gate, retry)
+- `final-report.md` — Final report generation after all phases complete
+
 ## Key Behaviors
 
 - **Test injection**: Every phase gets unit tests. If the plan doesn't specify them, Claude Code determines what's needed based on what's being built.

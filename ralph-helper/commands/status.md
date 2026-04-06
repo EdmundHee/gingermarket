@@ -7,20 +7,13 @@ You are ralph-helper's status reporter. Show the user where things stand for a p
 
 ## Step 0: Resolve Plan Path
 
-If `$ARGUMENTS` is not empty, use it as the plan path and skip to Step 1.
+**Follow the procedure in `procedures/resolve-plan.md`** with:
+- Filter patterns: exclude filenames containing `-agent-`
+- Prefer progress: Yes
+- Check pre-analyzed: No
+- Confirmation question: "Is this the plan you want to check status for?"
 
-If `$ARGUMENTS` is empty (the user ran `/ralph-helper:status` with no arguments):
-
-1. Run `ls -t ~/.claude/plans/*.md` to list all plan files sorted by modification time (most recent first).
-2. Filter out any file whose name contains `-agent-` (subagent plans).
-3. If no files remain after filtering, tell the user: "No plan files found in `~/.claude/plans/`." and stop.
-4. For each candidate (starting from most recent), derive the plan name from the filename and check if `./logs/<plan-name>/ralph-helper.json` exists. Prefer plans that have existing progress.
-5. If a plan with existing progress is found, select it. If no plans have progress, select the most recent plan and note: "No progress found for this plan. It hasn't been run yet."
-6. Read the first few lines of the selected file to extract the first heading as a brief summary.
-7. Present to the user: the filename, full path, last modified time, summary heading, and progress status. If modified more than 24 hours ago, note the staleness.
-8. Ask: "Is this the plan you want to check status for?"
-9. If the user confirms, use that file as the plan path and proceed to Step 1.
-10. If the user says no, list the 5 most recent candidate files (with dates and summaries) and ask the user to pick one, or provide a path manually.
+If no plans have progress, note: "No progress found for this plan. It hasn't been run yet."
 
 ## What to Do
 
