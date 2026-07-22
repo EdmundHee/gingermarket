@@ -85,6 +85,12 @@ graphify save-result \
 markdown entry under `graphify-out/memory/`, which `final-report.md`'s
 `graphify reflect` later aggregates into `graphify-out/reflections/LESSONS.md`.
 
+**Scope `--nodes` to the file(s) the outcome is about**, not their correct
+dependencies. On a `corrected`/`dead_end` outcome, `reflect` marks *every* listed
+node as partly "dead end" — so list the file that was **at fault** (e.g. the one
+you had to fix), not the correct building block it should have reused. Tainting a
+good node makes future runs distrust it wrongly.
+
 If the `graphify` CLI is unavailable, skip this home (do not block the gate) and
 note it — Homes 1 and 2 still captured the lesson.
 
