@@ -21,15 +21,19 @@ The calling command MUST provide these inputs before invoking this procedure:
 
 ## 6b. Compose the ralph-loop Prompt
 
-Read the plan, the codebase state, and PROGRESS.md. Then compose a prompt for ralph-loop that includes:
+First, **follow the procedure in `procedures/inject-context.md`** with operation
+**GATHER** to collect (1) prior lessons / known pitfalls for this phase, (2) the
+relevant existing code (graphify-searched), and (3) a graphify-derived
+do-not-modify boundary list. Then read the plan, the codebase state, and
+PROGRESS.md, and compose a prompt for ralph-loop that includes:
 
-1. **Context**: What has already been built in previous phases. Reference PROGRESS.md and the actual codebase state. Mention which phases are complete and what they produced.
+1. **Context**: What has already been built in previous phases. Reference PROGRESS.md and the actual codebase state. Mention which phases are complete and what they produced. **Fold in GATHER's prior-lessons block ("known pitfalls / what worked before") and its relevant-existing-code file list** so the loop starts informed instead of rediscovering.
 
 2. **Objectives**: What this phase needs to accomplish, drawn directly from the plan.
 
 3. **Test requirements**: The specific tests that must be written and pass. Include both the plan's tests and any determined to be needed. Be explicit about test names and what they verify. Also state that ALL previous phases' tests must continue to pass.
 
-4. **Boundaries**: What files and modules from previous phases should NOT be modified. Determine this from the git tags and understanding of what was built.
+4. **Boundaries**: What files and modules from previous phases should NOT be modified. **Use GATHER's do-not-modify list** (graphify dependency analysis); fall back to git tags + code reading if graphify is unavailable.
 
 5. **Completion criteria**: The concrete conditions under which this phase is done. This should map to testable, verifiable outcomes.
 

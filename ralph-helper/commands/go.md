@@ -31,6 +31,11 @@ folder + `_MEMORY.md` exist for this project, so later phases can capture learni
 and future runs auto-load them. If no Obsidian vault exists on this machine, skip
 it — execution proceeds without it.
 
+**Codebase search (graphify)**: **follow the procedure in
+`procedures/inject-context.md`** with operation **REFRESH** to keep the knowledge
+graph fresh (`graphify --update` if stale) and install the post-commit rebuild
+hook. Per-phase search happens later in 6b via GATHER. Skip if no graph exists.
+
 If the plan file does not exist, tell the user and stop.
 
 ## STEP 1.5: DETECT PRE-ANALYZED PLAN
