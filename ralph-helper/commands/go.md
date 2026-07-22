@@ -22,6 +22,20 @@ Read the plan file at the resolved plan path. Also read the codebase:
 - What existing patterns exist (project structure, naming conventions, existing tests)?
 - Is there an existing `./logs/` directory or `PROGRESS.md` from a previous run?
 
+**Project memory**: durable cross-session memory lives in the project's Obsidian
+`_MEMORY.md` and is auto-injected at session start. Check the current context for a
+`PROJECT MEMORY (...)` block — if present, read its `## Ralph Learnings` section
+and factor prior lessons into phase planning. Then **follow the procedure in
+`procedures/project-memory.md`** with operation **BOOTSTRAP** to ensure the vault
+folder + `_MEMORY.md` exist for this project, so later phases can capture learnings
+and future runs auto-load them. If no Obsidian vault exists on this machine, skip
+it — execution proceeds without it.
+
+**Codebase search (graphify)**: **follow the procedure in
+`procedures/inject-context.md`** with operation **REFRESH** to keep the knowledge
+graph fresh (`graphify --update` if stale) and install the post-commit rebuild
+hook. Per-phase search happens later in 6b via GATHER. Skip if no graph exists.
+
 If the plan file does not exist, tell the user and stop.
 
 ## STEP 1.5: DETECT PRE-ANALYZED PLAN

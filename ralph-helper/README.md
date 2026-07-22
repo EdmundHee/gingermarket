@@ -7,7 +7,11 @@ You create a plan in Claude Code. ralph-helper reads it, breaks it into phases, 
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
-- [ralph-loop](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/ralph-loop) plugin installed
+- [ralph-loop](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/ralph-loop) plugin installed **and enabled** — ralph-helper invokes `/ralph-loop:ralph-loop` per phase, so it must be in your `enabledPlugins` (`~/.claude/settings.json`), not just installed.
+
+**Optional (self-improvement layer, degrades gracefully if absent):**
+- An Obsidian vault at `~/.obsidian/GingerVault/Claude Code Logs` with the SessionStart memory hook (`~/.claude/hooks/project-memory.sh`) — durable cross-session memory.
+- The [graphify](https://pypi.org/project/graphifyy/) CLI + a `graphify-out/graph.json` in the target repo — codebase search for phase context and boundaries.
 
 ## Installation
 
@@ -152,6 +156,7 @@ Runs all tests across completed phases, reports results per phase, and flags any
 | `/ralph-helper:status [plan-path]` | Show current progress |
 | `/ralph-helper:phase [plan-path] <N>` | Run only a specific phase |
 | `/ralph-helper:test [plan-path]` | Run all tests across completed phases |
+| `/ralph-helper:evolve [--apply]` | Aggregate cross-project learnings, propose improvements to ralph-helper itself (human-reviewed) |
 
 All commands auto-detect the most recent plan in `~/.claude/plans/` when no path is provided. For `resume`, `status`, `test`, and `phase`, auto-detection prefers plans with existing progress logs. For `go`, it prefers a pre-analyzed (`-ralph-helper`) variant if one exists.
 
@@ -168,8 +173,12 @@ ralph-helper/
 Commands delegate shared logic to procedure files in `procedures/`:
 - `resolve-plan.md` — Plan path auto-detection and user confirmation
 - `detect-test-framework.md` — Test framework and pattern detection
-- `execute-phase.md` — Single-phase execution (git tag, ralph-loop, test gate, retry)
-- `final-report.md` — Final report generation after all phases complete
+- `execute-phase.md` — Single-phase execution (git tag, ralph-loop, test gate, compaction, retry)
+- `final-report.md` — Final report, graphify reflect, and Obsidian memory rollup
+- `project-memory.md` — Resolve/bootstrap the project's Obsidian `_MEMORY.md` (durable memory)
+- `capture-learnings.md` — Distill each phase's outcome into a lesson (write side of the loop)
+- `inject-context.md` — Fold prior lessons + graphify search into each phase prompt (read side)
+- `evolve.md` — Aggregate cross-project learnings, propose plugin self-improvements (human-reviewed)
 
 ## Key Behaviors
 
@@ -178,12 +187,42 @@ Commands delegate shared logic to procedure files in `procedures/`:
 - **Rollback**: Each phase is git-tagged at start and end. On failure, it rolls back and retries with error context (up to 2 retries, 3 total attempts per phase).
 - **Browser MCP**: If browser MCP tools are available, frontend phases get E2E verification (tests prefixed with `Browser:` or `E2E:`). If not, it skips gracefully.
 
+## Self-Improvement (memory & search)
+
+ralph-helper learns **per project** by closing a feedback loop across three
+timescales: within a phase (native ralph-loop retries), between phases, and
+between runs. Every piece reuses existing infrastructure — no new memory system.
+
+- **Capture (write)** — at each phase's terminal gate, `capture-learnings.md`
+  distills the outcome (root cause → fix, or what worked) into three homes: the
+  project's Obsidian `_MEMORY.md` (`## Ralph Learnings`), a structured
+  `./logs/<plan-name>/learnings.json`, and `graphify save-result`.
+- **Inject (read)** — before composing each phase's prompt, `inject-context.md`
+  folds prior lessons (`_MEMORY.md` + graphify `LESSONS.md`) and a graphify-searched
+  map of relevant code + dependency boundaries into the ralph-loop prompt, so a
+  phase starts informed instead of blind.
+- **Reflect + persist** — on completion, `final-report.md` runs
+  `graphify reflect --if-stale` and writes an Obsidian session log + rolls up
+  `_MEMORY.md` (capped). The SessionStart hook auto-injects that memory into the
+  next run, so improvement carries forward across sessions.
+
+All of this **degrades gracefully**: no Obsidian vault or no graphify graph → those
+homes are skipped and execution proceeds exactly as before.
+
+**Cross-project evolution** — `/ralph-helper:evolve` aggregates learnings across
+*all* projects (Obsidian `## Ralph Learnings` + `learnings.json`), detects
+systematic patterns (e.g. iteration estimates consistently under actual, a
+recurring failure class), and **proposes** edits to ralph-helper's own files as a
+review diff. It is dry-run by default, never touches `main`, and never
+auto-commits — a human reviews and merges. Run it occasionally, not per-build.
+
 ## Progress Tracking
 
-ralph-helper maintains two files during execution:
+ralph-helper maintains these files during execution:
 
 - `./logs/<plan-name>/PROGRESS.md` — Human-readable progress with phase status, test results, and git tags
 - `./logs/<plan-name>/ralph-helper.json` — Machine-readable state used by `/ralph-helper:resume`
+- `./logs/<plan-name>/learnings.json` — Structured per-phase lessons (feeds cross-project self-improvement)
 
 ## License
 

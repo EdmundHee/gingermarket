@@ -21,15 +21,19 @@ The calling command MUST provide these inputs before invoking this procedure:
 
 ## 6b. Compose the ralph-loop Prompt
 
-Read the plan, the codebase state, and PROGRESS.md. Then compose a prompt for ralph-loop that includes:
+First, **follow the procedure in `procedures/inject-context.md`** with operation
+**GATHER** to collect (1) prior lessons / known pitfalls for this phase, (2) the
+relevant existing code (graphify-searched), and (3) a graphify-derived
+do-not-modify boundary list. Then read the plan, the codebase state, and
+PROGRESS.md, and compose a prompt for ralph-loop that includes:
 
-1. **Context**: What has already been built in previous phases. Reference PROGRESS.md and the actual codebase state. Mention which phases are complete and what they produced.
+1. **Context**: What has already been built in previous phases. Reference PROGRESS.md and the actual codebase state. Mention which phases are complete and what they produced. **Fold in GATHER's prior-lessons block ("known pitfalls / what worked before") and its relevant-existing-code file list** so the loop starts informed instead of rediscovering.
 
 2. **Objectives**: What this phase needs to accomplish, drawn directly from the plan.
 
 3. **Test requirements**: The specific tests that must be written and pass. Include both the plan's tests and any determined to be needed. Be explicit about test names and what they verify. Also state that ALL previous phases' tests must continue to pass.
 
-4. **Boundaries**: What files and modules from previous phases should NOT be modified. Determine this from the git tags and understanding of what was built.
+4. **Boundaries**: What files and modules from previous phases should NOT be modified. **Use GATHER's do-not-modify list** (graphify dependency analysis); fall back to git tags + code reading if graphify is unavailable.
 
 5. **Completion criteria**: The concrete conditions under which this phase is done. This should map to testable, verifiable outcomes.
 
@@ -61,7 +65,36 @@ After ralph-loop completes:
 - Create git tag: `ralph-helper/<plan-name>/phase-<N>-done`
 - Update `./logs/<plan-name>/PROGRESS.md` with phase completion (iterations used, tests passing, git tag, duration)
 - Update `./logs/<plan-name>/ralph-helper.json` with phase status
-- Return success to the calling command
+- **Capture the learning**: **follow the procedure in `procedures/capture-learnings.md`** with outcome `success`, the iterations and retries used, what worked (and the root cause of any failed attempts if retries > 0), the tests touched, and whether the phase was browser-verified. This MUST happen here — before step 6g compaction discards the context that holds the details.
+- Proceed to step 6g (compact context), then return success to the calling command
+
+## 6g. Compact Context for Next Phase
+
+After a successful phase, reduce the context window before proceeding to the next phase.
+
+**Skip this step if**:
+- This is the **last phase** in the plan (no next phase to prepare for)
+- The phase ended via the **retry/failure** path (retry needs full error context)
+
+**Action**: Run `/compact` with this directive:
+
+> Ralph-helper is executing a multi-phase plan. Preserve this context:
+>
+> - Plan: [plan file path]
+> - Plan name: [plan name]
+> - Completed phases: 1 through [N] (details in ./logs/[plan-name]/PROGRESS.md)
+> - Next phase: [N+1] of [total] total
+> - State files: ./logs/[plan-name]/ralph-helper.json, ./logs/[plan-name]/PROGRESS.md
+> - Test framework: [framework] (command: [test-command])
+> - Git tags: ralph-helper/[plan-name]/phase-[N]-done is the latest checkpoint
+>
+> You are in the middle of executing /ralph-helper:go. After compaction, continue with the next phase by following procedures/execute-phase.md.
+
+Replace bracketed values with actual values from the current execution context.
+
+**If `/compact` fails or is unavailable**: Proceed without compaction. Log a note but do not block execution. This is a token optimization, not a correctness requirement.
+
+## 6h. Handle Test Failures
 
 **If tests fail**:
 - Run `git reset --hard ralph-helper/<plan-name>/phase-<N>-start` to rollback
@@ -78,6 +111,7 @@ After ralph-loop completes:
 **If still failing after all retries**:
 - Stop execution
 - Update PROGRESS.md with the failure details
+- **Capture the learning**: **follow the procedure in `procedures/capture-learnings.md`** with outcome `failure`, the iterations and retries used, the root cause, the last approach tried and why it fell short, and the tests touched. (Do NOT capture on the intermediate retries above — only here, at the terminal failure.)
 - Report to the calling command:
   - Which phase failed
   - What tests are failing and why

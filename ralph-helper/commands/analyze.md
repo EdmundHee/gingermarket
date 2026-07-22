@@ -19,6 +19,10 @@ You are ralph-helper's plan analyzer. Your job is to analyze a plan, break it in
 
 2. **Read the codebase** to understand project language(s) and structure. **Follow the procedure in `procedures/detect-test-framework.md`** to identify the test framework and existing test patterns.
 
+   **Project memory**: if a `PROJECT MEMORY (...)` block is present in context (auto-injected from the project's Obsidian `_MEMORY.md`), read its `## Ralph Learnings` and let prior lessons inform phase sizing and test choices. **Follow the procedure in `procedures/project-memory.md`** with operation **BOOTSTRAP** so the vault folder + `_MEMORY.md` exist before execution. Skip if no vault exists on this machine.
+
+   **Codebase search (graphify)**: **follow the procedure in `procedures/inject-context.md`** with operation **REFRESH** to keep the knowledge graph fresh before decomposing. It helps size phases and spot dependency order. Skip if no graph exists.
+
 3. **Decompose into phases**:
    - If the plan has `## Phase` headings, use them as a starting point
    - If not, reason about dependency order, testability boundaries, and appropriate sizing (3-8 iterations per phase, max 10)
