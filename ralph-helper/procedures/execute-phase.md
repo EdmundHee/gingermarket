@@ -61,6 +61,7 @@ After ralph-loop completes:
 - Create git tag: `ralph-helper/<plan-name>/phase-<N>-done`
 - Update `./logs/<plan-name>/PROGRESS.md` with phase completion (iterations used, tests passing, git tag, duration)
 - Update `./logs/<plan-name>/ralph-helper.json` with phase status
+- **Capture the learning**: **follow the procedure in `procedures/capture-learnings.md`** with outcome `success`, the iterations and retries used, what worked (and the root cause of any failed attempts if retries > 0), the tests touched, and whether the phase was browser-verified. This MUST happen here — before step 6g compaction discards the context that holds the details.
 - Proceed to step 6g (compact context), then return success to the calling command
 
 ## 6g. Compact Context for Next Phase
@@ -106,6 +107,7 @@ Replace bracketed values with actual values from the current execution context.
 **If still failing after all retries**:
 - Stop execution
 - Update PROGRESS.md with the failure details
+- **Capture the learning**: **follow the procedure in `procedures/capture-learnings.md`** with outcome `failure`, the iterations and retries used, the root cause, the last approach tried and why it fell short, and the tests touched. (Do NOT capture on the intermediate retries above — only here, at the terminal failure.)
 - Report to the calling command:
   - Which phase failed
   - What tests are failing and why
