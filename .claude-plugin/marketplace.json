@@ -6,9 +6,9 @@
   "plugins": [
     {
       "name": "ralph-helper",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "source": "./ralph-helper",
-      "description": "Plan-aware orchestrator for ralph-loop. Reads a plan, decomposes it into phases, injects unit tests, drives execution automatically with test gating, rollback, and regression checks."
+      "description": "Self-improving, plan-aware orchestrator for ralph-loop. Decomposes a plan into phases, injects unit tests, drives execution with test gating/rollback/regression checks, and learns per project via Obsidian memory + graphify search."
     }
   ]
 }
