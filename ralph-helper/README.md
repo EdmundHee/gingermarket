@@ -156,6 +156,7 @@ Runs all tests across completed phases, reports results per phase, and flags any
 | `/ralph-helper:status [plan-path]` | Show current progress |
 | `/ralph-helper:phase [plan-path] <N>` | Run only a specific phase |
 | `/ralph-helper:test [plan-path]` | Run all tests across completed phases |
+| `/ralph-helper:evolve [--apply]` | Aggregate cross-project learnings, propose improvements to ralph-helper itself (human-reviewed) |
 
 All commands auto-detect the most recent plan in `~/.claude/plans/` when no path is provided. For `resume`, `status`, `test`, and `phase`, auto-detection prefers plans with existing progress logs. For `go`, it prefers a pre-analyzed (`-ralph-helper`) variant if one exists.
 
@@ -177,6 +178,7 @@ Commands delegate shared logic to procedure files in `procedures/`:
 - `project-memory.md` — Resolve/bootstrap the project's Obsidian `_MEMORY.md` (durable memory)
 - `capture-learnings.md` — Distill each phase's outcome into a lesson (write side of the loop)
 - `inject-context.md` — Fold prior lessons + graphify search into each phase prompt (read side)
+- `evolve.md` — Aggregate cross-project learnings, propose plugin self-improvements (human-reviewed)
 
 ## Key Behaviors
 
@@ -206,6 +208,13 @@ between runs. Every piece reuses existing infrastructure — no new memory syste
 
 All of this **degrades gracefully**: no Obsidian vault or no graphify graph → those
 homes are skipped and execution proceeds exactly as before.
+
+**Cross-project evolution** — `/ralph-helper:evolve` aggregates learnings across
+*all* projects (Obsidian `## Ralph Learnings` + `learnings.json`), detects
+systematic patterns (e.g. iteration estimates consistently under actual, a
+recurring failure class), and **proposes** edits to ralph-helper's own files as a
+review diff. It is dry-run by default, never touches `main`, and never
+auto-commits — a human reviews and merges. Run it occasionally, not per-build.
 
 ## Progress Tracking
 
