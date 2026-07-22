@@ -78,8 +78,12 @@ graphify save-result \
   --answer  "<the distilled lesson>" \
   --type    query \
   --outcome useful|corrected|dead_end \
-  --nodes   "<comma-separated files/nodes the phase touched>"
+  --nodes   <file1> <file2> ...
 ```
+
+`--nodes` takes space-separated node/file names (not a comma list). This writes a
+markdown entry under `graphify-out/memory/`, which `final-report.md`'s
+`graphify reflect` later aggregates into `graphify-out/reflections/LESSONS.md`.
 
 If the `graphify` CLI is unavailable, skip this home (do not block the gate) and
 note it — Homes 1 and 2 still captured the lesson.

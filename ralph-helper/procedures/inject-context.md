@@ -54,11 +54,12 @@ and pick the ones matching the phase objective (never invent tokens). Then:
 
 - `graphify query "<expanded phase-objective tokens>"` → the files/nodes relevant
   to building this phase → seed the prompt's **Context** ("relevant existing code").
-- For each file a previous, completed phase produced (known from git tags /
-  PROGRESS.md), use `graphify explain "<node>"` and `graphify path "<A>" "<B>"` to
-  find what the current phase's targets depend on. Files that prior phases own and
-  the current phase only *depends on* (does not extend) become the prompt's
-  **Boundaries** ("do NOT modify these").
+- For boundaries, use `graphify affected "<target>"` (reverse traversal — what
+  depends on the node) and `graphify explain "<node>"` to see a node's neighbours.
+  Files that prior, completed phases own (known from git tags / PROGRESS.md) and
+  that the current phase only *depends on* (does not extend) become the prompt's
+  **Boundaries** ("do NOT modify these"). `graphify path "<A>" "<B>"` helps confirm
+  how two nodes relate when the dependency direction is unclear.
 
 If graphify is unavailable, derive boundaries the old way (git tags + reading the
 code) — this is exactly step 6b's original behaviour.
