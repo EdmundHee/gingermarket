@@ -6,6 +6,7 @@ import type { Tracker } from '../types'
 
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const PLAN = '# Fix the thing\n\n## Context\nwhy\n\n## Change\n1. edit a\n2. test b\n'
+const MARK = 'mcp__plan-tracker__mark_done'
 const PANE = {
   title: 'Plan', isFocused: false, bodyColumns: 80, placement: 'dock' as const,
   scroll: { offset: 0, bodyRows: 30 }, view: {},
@@ -74,9 +75,19 @@ async function start($: Engine, on: On, tracker?: Tracker) {
     seen.submitted.push(e.text)
     return { text: e.text }
   })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: { ok: true } }))
   await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   return seen
 }
+
+/** The main turn ends answered; `agentId` or `reason` override that. */
+const endTurn = ($: Engine, over: { agentId?: string; reason?: 'answer' | 'aborted' | 'error' } = {}) =>
+  $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1', ...over })
+
+const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
 
 describe('plan-tracker', () => {
   test('approval adds a group with haiku\'s items', async ($, on) => {
@@ -109,7 +120,7 @@ describe('plan-tracker', () => {
     haiku(on, () => '{"verdict":"verified","reason":"Edit on a.ts seen"}')
     const seen = await start($, on, seeded([[1, 'open']]))
 
-    const ran = await $.tool.call({ tool: 'mcp__plan-tracker__mark_done', id: 1, evidence: 'edited a.ts' })
+    const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
 
     expect((ran.result as { message: string }).message).toContain('verified')
     expect(seen.state?.plans[0]?.items[0]?.status).toBe('verified')
@@ -119,7 +130,7 @@ describe('plan-tracker', () => {
     haiku(on, () => '{"verdict":"unverified","reason":"no edit on a.ts"}')
     const seen = await start($, on, seeded([[1, 'open']]))
 
-    const ran = await $.tool.call({ tool: 'mcp__plan-tracker__mark_done', id: 1, evidence: 'done' })
+    const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'done' })
 
     expect((ran.result as { message: string }).message).toContain('no edit on a.ts')
     const item = seen.state?.plans[0]?.items[0]
@@ -132,7 +143,7 @@ describe('plan-tracker', () => {
 
     const { sections } = await $.prompt.compose({
       model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'],
-      tools: ['Read', 'mcp__plan-tracker__mark_done'], outputStyle: null, traits: [],
+      tools: ['Read', MARK], outputStyle: null, traits: [],
     })
 
     const text = sections.find(s => s.id === 'plan-tracker:open')?.text ?? ''
@@ -143,17 +154,31 @@ describe('plan-tracker', () => {
   })
 
   test('pressing work submits a prompt', async ($, on) => {
-    const seen = await start($, on, seeded([[1, 'open']]))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
 
-    for (const surface of ['terminal', 'desktop'] as const) {
-      const pane = await $.ui.mount({ plugin: 'plan-tracker', surface, component: 'Pane', requestId: 'plan-tracker', props: PANE })
-      await pane.press({ key: 'work:1' })
-    }
+    const terminal = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await terminal.press({ key: 'work:1' })
+    const desktop = await $.ui.mount({ plugin: 'plan-tracker', surface: 'desktop', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await desktop.press({ key: 'work:2' })
 
     expect(seen.submitted).toHaveLength(2)
     expect(seen.submitted[0]).toContain('#1')
     expect(seen.submitted[0]).toContain('item 1')
     expect(seen.submitted[0]).toContain('mark_done')
+    expect(seen.submitted[1]).toContain('#2')
+  })
+
+  test('second work press while queued is ignored', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'open']]))
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    await pane.press({ key: 'work:1' })
+    await pane.press({ key: 'work:1' })
+    expect(seen.submitted).toHaveLength(1)
+
+    await $.turn.start({ text: seen.submitted[0] ?? '', turnId: 't2' })
+    await pane.press({ key: 'work:1' })
+    expect(seen.submitted).toHaveLength(2)
   })
 
   test('verify all applies verdicts without unverifying', async ($, on) => {
@@ -166,6 +191,60 @@ describe('plan-tracker', () => {
     const items = seen.state?.plans[0]?.items ?? []
     expect(items.map(i => i.status)).toEqual(['verified', 'claimed', 'verified'])
     expect(items[1]?.note).toBe('still no test')
+  })
+
+  test('turn end audits open items after an edit', async ($, on) => {
+    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"edit seen"}]')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    await edit($)
+    await endTurn($)
+
+    expect(calls.n).toBe(1)
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('verified')
+    expect(seen.store.get(KEY)).toEqual(seen.state)
+  })
+
+  test('turn end without work calls no haiku', async ($, on) => {
+    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"x"}]')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    await $.tool.call({ tool: 'Read', file_path: '/tmp/a.ts' })
+    await endTurn($)
+
+    expect(calls.n).toBe(0)
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
+  })
+
+  test('turn end with everything verified calls no haiku', async ($, on) => {
+    const calls = haiku(on, () => '[]')
+    await start($, on, seeded([[1, 'verified']]))
+
+    await edit($)
+    await endTurn($)
+
+    expect(calls.n).toBe(0)
+  })
+
+  test('subagent and aborted turns call no haiku', async ($, on) => {
+    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"x"}]')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    await edit($)
+    await endTurn($, { agentId: 'a1' })
+    await endTurn($, { reason: 'aborted' })
+
+    expect(calls.n).toBe(0)
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
+  })
+
+  test('mark_done is listed in the prompt, not deferred', async ($, on) => {
+    await start($, on)
+
+    const r = await $.tool.describe({ tool: MARK, description: 'd', isDeferred: true, provider: { plugin: 'plan-tracker', tier: 'user' } })
+
+    expect(r.isDeferred).toBe(false)
+    expect(r.description).toBe('d')
   })
 
   test('second approval adds a group on top', async ($, on) => {

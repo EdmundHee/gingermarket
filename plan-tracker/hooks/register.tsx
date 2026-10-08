@@ -8,6 +8,10 @@ const DOCK_COLUMNS = 48 // width when docked beside a fullscreen transcript; inl
 const MARK = 'mcp__plan-tracker__mark_done'
 const EMPTY: Tracker = { nextId: 1, plans: [] }
 const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
+/** Tools whose call could finish an item; a turn with none ends without an audit. */
+const WORK = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
+let worked = 0 // main-loop WORK calls in the running turn
+const queued = new Set<number>() // items whose work prompt waits for an idle session
 
 // ponytail: keyed by the start cwd; follow /cd if it ever matters
 let storeKey = ''
@@ -116,6 +120,11 @@ async function reextract($: EngineInterface, plan: PlanGroup) {
 }
 
 async function work($: EngineInterface, plan: PlanGroup, item: PlanItem) {
+  if (queued.has(item.id)) {
+    $.ui.toast(`#${item.id} already queued`)
+    return
+  }
+  queued.add(item.id)
   const text =
     `Work on plan item #${item.id}: ${item.text}\n` +
     `Plan "${plan.title}" (${plan.file}); read it for context if needed. ` +
@@ -124,13 +133,14 @@ async function work($: EngineInterface, plan: PlanGroup, item: PlanItem) {
   $.ui.toast(`sent #${item.id}`)
 }
 
-async function verifyAll($: EngineInterface) {
+/** Audits every non-verified item in one haiku call; never un-verifies. `quiet` toasts only when something new is verified. */
+async function verifyAll($: EngineInterface, quiet = false) {
   const before = await save($, t => ({ ...t, busy: 'verify' }))
   const pending = before.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
   const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ' (developer claims done)' : ''}`).join('\n')
   const answer = await haiku($, VERIFY_ALL, `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}`, 2048)
   const verdicts = Array.isArray(answer) ? answer.filter(isVerdict) : []
-  await save($, ({ busy: _busy, ...t }) => {
+  const after = await save($, ({ busy: _busy, ...t }) => {
     let next: Tracker = t
     for (const v of verdicts) {
       const found = findItem(next, Number(v.id))
@@ -139,8 +149,12 @@ async function verifyAll($: EngineInterface) {
     }
     return next
   })
-  const n = verdicts.filter(v => v.verdict === 'verified').length
-  $.ui.toast(verdicts.length ? `verified ${n} of ${pending.length}` : 'verifier unavailable')
+  const newly = verdicts.filter(v => v.verdict === 'verified' && pending.some(i => i.id === Number(v.id))).map(v => `#${v.id}`)
+  if (quiet) {
+    if (newly.length) $.ui.toast(`tracker: ✓ ${newly.join(' ')} · ${status(after) ?? ''}`)
+    return
+  }
+  $.ui.toast(verdicts.length ? `verified ${newly.length} of ${pending.length}` : 'verifier unavailable')
 }
 
 export const register: Register = on => {
@@ -166,6 +180,31 @@ export const register: Register = on => {
     await $.command.register({ name: 'plan-tracker', description: 'Open the plan tracker pane', argumentHint: '[reset]' })
     void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
     return next(e)
+  })
+
+  // The engine puts a plugin's tool behind ToolSearch; in front, Claude can mark without loading it first.
+  on('tool.describe', { tool: MARK }, (_$, e) => ({ description: e.description, isDeferred: false }))
+
+  on('turn.start', ($, e, next) => {
+    worked = 0
+    const m = /^Work on plan item #(\d+):/.exec(e.text)
+    if (m) queued.delete(Number(m[1]))
+    return next(e)
+  })
+
+  on('tool.call', ($, e, next) => {
+    if (e.agentId === undefined && WORK.has(e.tool)) worked += 1
+    return next(e)
+  })
+
+  // ponytail: awaited, not fire-and-forget; work left running after a hook returns may be dropped with its dispatch
+  on('turn.complete', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || e.reason !== 'answer' || worked === 0) return r
+    const t = await read($, tracker)
+    if (t.busy || !t.plans.some(p => p.items.some(i => i.status !== 'verified'))) return r
+    await verifyAll($, true)
+    return r
   })
 
   on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
@@ -214,7 +253,7 @@ export const register: Register = on => {
       '# Plan tracker',
       'Items from approved plans still open in this project:',
       ...lines,
-      'When you finish one, call mark_done with its id and one line of evidence. Never mark what you have not done.',
+      'Call mark_done right after you finish each item, before starting the next, with its id and one line of evidence. Never mark what you have not done.',
     ].join('\n')
     return { sections: [...r.sections, { id: 'plan-tracker:open', text, scope: 'session' }] }
   })

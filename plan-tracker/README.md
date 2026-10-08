@@ -26,12 +26,16 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - `/plan-tracker` opens the pane (needed below 144 columns, where an unasked pane waits);
   `/plan-tracker reset` wipes the tracker for this project.
 - Status line: `plan 2/7`.
+- At the end of every turn in which Claude edited a file or ran a command, the tracker audits the
+  open items itself (one haiku call): `✓` marks land without Claude calling `mark_done`.
+- `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
 
 A second approval adds a new group on top; a fully verified group collapses to one line.
 
 ## Cost
 
-One haiku call per approval, per `mark_done`, per `Verify all`. Nothing per turn.
+One haiku call per approval, per `mark_done`, per `Verify all`, and per turn that touched files while
+items are open. Nothing on a read-only turn.
 
 ## Where things are kept
 
