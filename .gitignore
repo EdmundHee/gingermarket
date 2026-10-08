@@ -1,3 +1,6 @@
 .DS_Store
 graphify-out/
 docs/
+
+# engine-laid type declarations beside a mod
+plan-tracker/.claude-plugin/types/

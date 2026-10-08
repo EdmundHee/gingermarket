@@ -1,0 +1,7 @@
+{
+  "name": "plan-tracker",
+  "version": "0.1.0",
+  "description": "Tracks approved plan items in a pane: Claude marks, haiku verifies, click an item to send Claude to work on it.",
+  "author": { "name": "Edmund Hee" },
+  "types": "./types/index.d.ts"
+}
