@@ -420,6 +420,32 @@ describe('plan-tracker', () => {
     expect(seen.submitted).toHaveLength(2)
   })
 
+  test('approval keeps every item haiku lists', async ($, on) => {
+    const forty = Array.from({ length: 40 }, (_, n) => `step ${n + 1}`)
+    haiku(on, () => JSON.stringify(forty))
+    approved(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    const items = seen.state?.plans[0]?.items ?? []
+    expect(items).toHaveLength(40)
+    expect(items[39]?.text).toBe('step 40')
+  })
+
+  test('compose lists every open item', async ($, on) => {
+    const forty = Array.from({ length: 40 }, (_, n): [number, PlanItem['status']] => [n + 1, 'open'])
+    await start($, on, seeded(forty))
+
+    const { sections } = await $.prompt.compose({
+      model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'],
+      tools: ['Read', MARK], outputStyle: null, traits: [],
+    })
+
+    const text = sections.find(s => s.id === 'plan-tracker:open')?.text ?? ''
+    expect(text).toContain('#40 [open] item 40')
+  })
+
   test('pane shows nudges and the group note', async ($, on) => {
     await start($, on, seeded([[1, 'open', { nudges: 1 }]], 'waiting on you: which DB'))
 
