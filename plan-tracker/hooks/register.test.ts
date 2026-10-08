@@ -58,7 +58,7 @@ function fakeStore(on: On, entries: Record<string, unknown>) {
 }
 
 /** Starts the session with every op the plugin reaches answered beneath it; hooks go in before the first `$` call. */
-async function start($: Engine, on: On, tracker?: Tracker) {
+async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] = []) {
   const seen = {
     state: undefined as Tracker | undefined,
     store: fakeStore(on, tracker ? { [KEY]: tracker } : {}),
@@ -71,7 +71,7 @@ async function start($: Engine, on: On, tracker?: Tracker) {
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__plan-tracker__${e.name}` } }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
-  on('session.messages', () => ({ value: [] }))
+  on('session.messages', () => ({ value: messages as never }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', () => ({ value: undefined }))
@@ -473,5 +473,20 @@ describe('plan-tracker', () => {
     await pane.press({ key: 'verify-all' })
 
     expect(models).toEqual(['opus', 'opus', 'opus'])
+  })
+  test('verifier sees the head and tail of a long tool output', async ($, on) => {
+    const prompts: string[] = []
+    on('model.complete', (_$, e) => {
+      prompts.push(e.prompt)
+      return { value: { isAnswered: true as const, text: '{"verdict":"verified","reason":"x"}', usage: USAGE } }
+    })
+    const out = `HEAD-MARK ${'(pass) a test\n'.repeat(200)}(fail) TAIL-MARK Received: ["haiku"]`
+    const transcript = [{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 'u1', tool: 'Bash', input: { command: 'test' }, text: out }] }]
+    await start($, on, seeded([[1, 'open']]), transcript)
+
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'ran the tests' })
+
+    expect(prompts[0]).toContain('HEAD-MARK')
+    expect(prompts[0]).toContain('TAIL-MARK Received: ["haiku"]')
   })
 })

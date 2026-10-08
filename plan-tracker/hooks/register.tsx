@@ -82,17 +82,21 @@ function findItem(t: Tracker, id: number) {
   return undefined
 }
 
+/** Head and tail of a long output: commands echo at the start, failures and summaries land at the end. */
+const clip = (s: string, head = 200, tail = 600) => (s.length > head + tail ? `${s.slice(0, head)} … ${s.slice(-tail)}` : s)
+
 /** The recent tool calls as the verifier's evidence, the tracker's own left out. */
 // ponytail: transcript tool uses, not git diff; add `git diff --stat` when the verifier misses file work
+// ponytail: 800 chars per output, 24000 in all (oldest dropped); a failure mid-way through a huge log is still cut
 async function evidence($: EngineInterface, last: number) {
   const messages = await $.session.messages()
   if (!Array.isArray(messages)) return '(transcript unavailable)'
   const uses: ToolUseSummary[] = messages.flatMap(m => m.toolUses).filter(u => !u.tool.startsWith('mcp__plan-tracker__'))
   const lines = uses.slice(-last).map(u => {
-    const out = (u.text ?? '').replace(/\s+/g, ' ').slice(0, 300)
+    const out = clip((u.text ?? '').replace(/\s+/g, ' '))
     return `${u.tool} ${JSON.stringify(u.input).slice(0, 200)} → ${out}${u.isError ? ' [error]' : ''}`
   })
-  return lines.join('\n').slice(-12000) || '(no tool calls yet)'
+  return lines.join('\n').slice(-24000) || '(no tool calls yet)'
 }
 
 // ponytail: no item cap; 4096 tokens is room for ~100 items, the pane scrolls (engine-owned) past bodyRows
