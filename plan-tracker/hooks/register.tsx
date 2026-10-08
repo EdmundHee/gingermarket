@@ -10,7 +10,11 @@ const EMPTY: Tracker = { nextId: 1, plans: [] }
 const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
 /** Tools whose call could finish an item; a turn with none ends without an audit. */
 const WORK = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
+const NUDGES = 2 // auto-nudges per item before the pane asks for you
+const WORK_PROMPT = /^Work on plan items? ((?:#\d+ ?)+):/
 let worked = 0 // main-loop WORK calls in the running turn
+let planTurn = false // this main turn was plan work: approval, a tracker prompt, or a mark_done
+let activePlan: string | undefined // group the nudge targets; falls back to the newest
 const queued = new Set<number>() // items whose work prompt waits for an idle session
 
 // ponytail: keyed by the start cwd; follow /cd if it ever matters
@@ -24,16 +28,22 @@ const VERIFY =
   "You audit whether a plan item was completed, from the developer's claim and the recent tool calls (file edits, " +
   'commands, outputs). Reply ONLY with JSON {"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}. ' +
   '"verified" only when the tool calls show the work; a claim alone is not evidence.'
-const VERIFY_ALL =
-  'You audit which plan items were completed, from the recent tool calls (file edits, commands, outputs). Reply ONLY ' +
-  'with a JSON array [{"id":<number>,"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}], one ' +
-  'entry per item given. "verified" only when the tool calls show the work; a claim alone is not evidence.'
+const AUDIT =
+  'You audit which plan items were completed, from the recent tool calls (file edits, commands, outputs) and the ' +
+  "developer's final reply. Reply ONLY with JSON " +
+  '{"items":[{"id":<number>,"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}],' +
+  '"reply":"done"|"partial"|"blocked","why":"<at most 100 characters>"}, one items entry per item given. ' +
+  '"verified" only when the tool calls show the work; a claim alone is not evidence. ' +
+  '"reply": "blocked" when the developer asked the user a question, needs a decision, or hit an error they could not fix; ' +
+  '"partial" when they stopped with work left or offered to continue; "done" when they say everything is finished.'
 
 type Verdict = { id?: number; verdict: 'verified' | 'unverified'; reason: string }
+type Audit = { items: Verdict[]; reply?: 'done' | 'partial' | 'blocked'; why?: string }
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === 'string')
 const isVerdict = (v: unknown): v is Verdict =>
   typeof v === 'object' && v !== null && ['verified', 'unverified'].includes(String((v as Verdict).verdict))
+const isAudit = (v: unknown): v is Audit => typeof v === 'object' && v !== null && Array.isArray((v as Audit).items)
 
 /** One haiku call, parsed as JSON; undefined when it did not answer or answered prose. */
 async function haiku($: EngineInterface, system: string, prompt: string, maxTokens = 1024): Promise<unknown> {
@@ -92,17 +102,29 @@ async function extract($: EngineInterface, planText: string) {
 
 const newItems = (t: Tracker, texts: string[]): PlanItem[] => texts.map((text, n) => ({ id: t.nextId + n, text, status: 'open' }))
 
+/** Adds the approved plan as a new group on top; returns its id. */
 async function addPlan($: EngineInterface, planText: string, file: string) {
   const title = planText.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? file.split('/').pop() ?? 'Plan'
   const texts = await extract($, planText)
+  const id = String(Date.now())
   await save($, t => {
     const items = newItems(t, texts ?? [])
-    const group: PlanGroup = { id: String(Date.now()), title, file, approvedAt: new Date().toISOString(), items }
+    const group: PlanGroup = { id, title, file, approvedAt: new Date().toISOString(), items }
     if (!texts) group.note = 'could not extract items; press extract again'
     return { ...t, nextId: t.nextId + items.length, plans: [group, ...t.plans] }
   })
   $.ui.toast(texts ? `tracker: ${texts.length} items from "${title}"` : `tracker: could not extract items from "${title}"`)
+  return id
 }
+
+const setGroupNote = (t: Tracker, planId: string, note: string | undefined): Tracker => ({
+  ...t,
+  plans: t.plans.map(p => {
+    if (p.id !== planId) return p
+    const { note: _old, ...rest } = p
+    return note === undefined ? rest : { ...rest, note }
+  }),
+})
 
 async function reextract($: EngineInterface, plan: PlanGroup) {
   await save($, t => ({ ...t, busy: 'extract' }))
@@ -119,27 +141,39 @@ async function reextract($: EngineInterface, plan: PlanGroup) {
   })
 }
 
-async function work($: EngineInterface, plan: PlanGroup, item: PlanItem) {
-  if (queued.has(item.id)) {
-    $.ui.toast(`#${item.id} already queued`)
+/** Queues one prompt sending Claude to the given items of `plan`; those already queued are left out. */
+async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?: string) {
+  const fresh = items.filter(i => !queued.has(i.id))
+  if (fresh.length === 0) {
+    $.ui.toast(`${items.map(i => `#${i.id}`).join(' ')} already queued`)
     return
   }
-  queued.add(item.id)
+  fresh.forEach(i => queued.add(i.id))
+  const ids = fresh.map(i => `#${i.id}`).join(' ')
+  const rows = fresh.map(i => `#${i.id} ${i.text}${i.note ? ` (audit: ${i.note})` : ''}`).join('\n')
   const text =
-    `Work on plan item #${item.id}: ${item.text}\n` +
-    `Plan "${plan.title}" (${plan.file}); read it for context if needed. ` +
-    `When finished, call mark_done with id ${item.id} and one line of evidence.`
+    `Work on plan item${fresh.length > 1 ? 's' : ''} ${ids}:\n${rows}\n` +
+    `Plan "${plan.title}" (${plan.file}); read it for context if needed.` +
+    (why ? ` Your last reply read as: ${why}.` : '') +
+    ' Finish each item, then call mark_done with its id and one line of evidence. If one is impossible or already done, say which and why.'
   await $.prompt.submit({ text })
-  $.ui.toast(`sent #${item.id}`)
+  $.ui.toast(`sent ${ids}`)
 }
 
-/** Audits every non-verified item in one haiku call; never un-verifies. `quiet` toasts only when something new is verified. */
-async function verifyAll($: EngineInterface, quiet = false) {
+/**
+ * Audits every non-verified item in one haiku call, reading the tool calls and (when given) Claude's final reply;
+ * never un-verifies. `quiet` toasts only when something new is verified. Returns what haiku said, or undefined.
+ */
+async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: string } = {}): Promise<Audit | undefined> {
   const before = await save($, t => ({ ...t, busy: 'verify' }))
   const pending = before.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
   const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ' (developer claims done)' : ''}`).join('\n')
-  const answer = await haiku($, VERIFY_ALL, `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}`, 2048)
-  const verdicts = Array.isArray(answer) ? answer.filter(isVerdict) : []
+  const prompt =
+    `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
+    `Developer's final reply:\n${(opts.reply || '(none)').slice(0, 4000)}`
+  const answer = await haiku($, AUDIT, prompt, 2048)
+  const audit = isAudit(answer) ? answer : undefined
+  const verdicts = audit?.items.filter(isVerdict) ?? []
   const after = await save($, ({ busy: _busy, ...t }) => {
     let next: Tracker = t
     for (const v of verdicts) {
@@ -150,16 +184,37 @@ async function verifyAll($: EngineInterface, quiet = false) {
     return next
   })
   const newly = verdicts.filter(v => v.verdict === 'verified' && pending.some(i => i.id === Number(v.id))).map(v => `#${v.id}`)
-  if (quiet) {
+  if (opts.quiet) {
     if (newly.length) $.ui.toast(`tracker: ✓ ${newly.join(' ')} · ${status(after) ?? ''}`)
-    return
+  } else {
+    $.ui.toast(verdicts.length ? `verified ${newly.length} of ${pending.length}` : 'verifier unavailable')
   }
-  $.ui.toast(verdicts.length ? `verified ${newly.length} of ${pending.length}` : 'verifier unavailable')
+  return audit
+}
+
+/** After a plan turn's audit: sends the active plan's leftovers back as one prompt, or notes why not. */
+async function nudge($: EngineInterface, audit: Audit | undefined) {
+  const t = await read($, tracker)
+  const plan = t.plans.find(p => p.id === activePlan) ?? t.plans[0]
+  if (!plan) return
+  const left = plan.items.filter(i => i.status !== 'verified')
+  if (left.length === 0 || !audit) return // done, or verifier unavailable: never nudge blind
+  const note = async (text: string) => {
+    await save($, s => setGroupNote(s, plan.id, text))
+    $.ui.toast(`tracker: ${text}`)
+  }
+  if (audit.reply === 'blocked') return note(`waiting on you: ${audit.why ?? 'Claude asked a question'}`)
+  const able = left.filter(i => (i.nudges ?? 0) < NUDGES)
+  if (able.length === 0) return note(`${left.map(i => `#${i.id}`).join(' ')} need you (auto-nudge limit); press ▶ or ✓`)
+  await save($, s => able.reduce((next, i) => setItem(next, i.id, { nudges: (i.nudges ?? 0) + 1 }), setGroupNote(s, plan.id, undefined)))
+  await work($, plan, able, audit.why)
 }
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     storeKey = `tracker:${e.cwd}`
+    planTurn = false
+    activePlan = undefined
     const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
     await update($, tracker, () => stored)
     $.ui.status(status(stored))
@@ -185,10 +240,15 @@ export const register: Register = on => {
   // The engine puts a plugin's tool behind ToolSearch; in front, Claude can mark without loading it first.
   on('tool.describe', { tool: MARK }, (_$, e) => ({ description: e.description, isDeferred: false }))
 
-  on('turn.start', ($, e, next) => {
+  on('turn.start', async ($, e, next) => {
     worked = 0
-    const m = /^Work on plan item #(\d+):/.exec(e.text)
-    if (m) queued.delete(Number(m[1]))
+    planTurn = false
+    const ids = (WORK_PROMPT.exec(e.text)?.[1]?.match(/\d+/g) ?? []).map(Number)
+    if (ids.length) {
+      planTurn = true
+      ids.forEach(id => queued.delete(id))
+      activePlan = findItem(await read($, tracker), ids[0] ?? -1)?.plan.id ?? activePlan
+    }
     return next(e)
   })
 
@@ -198,12 +258,14 @@ export const register: Register = on => {
   })
 
   // ponytail: awaited, not fire-and-forget; work left running after a hook returns may be dropped with its dispatch
+  // A plan turn audits even without file work: Claude approving then stopping ("I'll start with…") is the hanging case.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (e.agentId !== undefined || e.reason !== 'answer' || worked === 0) return r
+    if (e.agentId !== undefined || e.reason !== 'answer' || (worked === 0 && !planTurn)) return r
     const t = await read($, tracker)
     if (t.busy || !t.plans.some(p => p.items.some(i => i.status !== 'verified'))) return r
-    await verifyAll($, true)
+    const audit = await verifyAll($, { quiet: true, reply: e.answer })
+    if (planTurn) await nudge($, audit)
     return r
   })
 
@@ -216,7 +278,10 @@ export const register: Register = on => {
       const result = ran.result as { plan?: string | null; filePath?: string } | undefined
       const file = result?.filePath ?? ''
       const text = result?.plan ?? (file ? await $.fs.read(file) : '')
-      if (text) await addPlan($, text, file)
+      if (text) {
+        activePlan = await addPlan($, text, file)
+        planTurn = true
+      }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
     }
@@ -228,6 +293,10 @@ export const register: Register = on => {
     const found = findItem(await read($, tracker), id)
     // a registered tool answers as an MCP tool does: a string or content blocks, never an object
     if (!found) return { result: `No plan item #${id}.` }
+    if (e.agentId === undefined) {
+      planTurn = true
+      activePlan = found.plan.id
+    }
     const prompt = `Item #${id}: ${found.item.text}\nDeveloper's claim: ${String(e.evidence ?? '')}\n\nRecent tool calls:\n${await evidence($, 40)}`
     const verdict = await haiku($, VERIFY, prompt)
     const checked = isVerdict(verdict)
@@ -294,10 +363,10 @@ export const register: Register = on => {
       <Box flexDirection="column">
         <Box flexDirection="row" gap={1}>
           <Box flexGrow={1}>
-            <Text color={color[item.status]} wrap="truncate">{`${glyph[item.status]} #${item.id} ${item.text}`}</Text>
+            <Text color={color[item.status]} wrap="truncate">{`${glyph[item.status]} #${item.id}${item.nudges ? ` ↻${item.nudges}` : ''} ${item.text}`}</Text>
           </Box>
           {item.status !== 'verified' && (
-            <Button key={`work:${item.id}`} plain onPress={() => work($, plan, item)}>▶</Button>
+            <Button key={`work:${item.id}`} plain onPress={() => work($, plan, [item])}>▶</Button>
           )}
           {item.status !== 'verified' && (
             <Button key={`done:${item.id}`} plain onPress={() => save($, s => setItem(s, item.id, { status: 'verified', note: 'by you' }))}>✓</Button>
@@ -322,7 +391,7 @@ export const register: Register = on => {
             <Button key={`remove:${plan.id}`} plain dimColor onPress={() => save($, s => ({ ...s, plans: s.plans.filter(p => p.id !== plan.id) }))}>x</Button>
           </Box>
           {!done && plan.items.map(item => row(plan, item))}
-          {plan.items.length === 0 && plan.note !== undefined && <Text dimColor>{plan.note}</Text>}
+          {!done && plan.note !== undefined && <Text dimColor wrap="truncate">{plan.note}</Text>}
           {plan.items.length === 0 && (
             <Button key="extract-again" onPress={() => reextract($, plan)}>{t.busy === 'extract' ? 'extracting…' : 'extract again'}</Button>
           )}
@@ -334,7 +403,7 @@ export const register: Register = on => {
       <Box flexDirection="column" gap={1}>
         {t.plans.map(group)}
         {pending && (
-          <Button key="verify-all" variant="primary" onPress={() => verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
+          <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
         )}
       </Box>
     )
