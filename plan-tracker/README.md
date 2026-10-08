@@ -50,4 +50,5 @@ items are open, and per plan turn (even one that only talked). Nothing on a read
 ## Where things are kept
 
 Per project, in Claude Code's plugin store (`tracker:<cwd>`), so it survives sessions.
-The verifier reads tool calls from the session transcript, never files or git on its own.
+The verifier reads tool calls from the session transcript, never files or git on its own. A long output
+reaches it as its first 200 and last 600 characters, so a failure at the end of a test run is seen.

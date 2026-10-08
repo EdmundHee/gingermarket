@@ -34,6 +34,7 @@ run: `claude plugin test plan-tracker`
 | TC-027 | extraction has no item cap | unit | empty store; opus answers 40 strings | 1. approve plan | group holds 40 items, the last `step 40` | plan-tracker/hooks/register.test.ts > approval keeps every item opus lists | pass |
 | TC-028 | system prompt lists every open item | unit | 40 open items; tools include mark_done | 1. `$.prompt.compose()` | section `plan-tracker:open` contains `#40 [open] item 40` | plan-tracker/hooks/register.test.ts > compose lists every open item | pass |
 | TC-029 | opus only | unit | empty store; fake records `e.model` | 1. approve a plan 2. `$.tool.call mark_done {id:1, evidence}` 3. press `verify-all` | every `model.complete` call has `model: 'opus'` | plan-tracker/hooks/register.test.ts > every call asks opus | pass |
+| TC-030 | verifier sees long output tail | unit | #1 open; transcript has one Bash output: `HEAD-MARK`, 200 pass lines, then `(fail) TAIL-MARK Received: ["haiku"]` | 1. `$.tool.call mark_done {id:1, evidence}` | verifier prompt contains `HEAD-MARK` and `TAIL-MARK Received: ["haiku"]` | plan-tracker/hooks/register.test.ts > verifier sees the head and tail of a long tool output | pass |
 
 ## Rules
 
