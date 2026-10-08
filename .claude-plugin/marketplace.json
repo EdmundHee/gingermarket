@@ -12,9 +12,9 @@
     },
     {
       "name": "plan-tracker",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "source": "./plan-tracker",
-      "description": "Plan tracker pane: items of every approved plan, Claude marks them done, haiku verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own."
+      "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own."
     }
   ]
 }

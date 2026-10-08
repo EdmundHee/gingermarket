@@ -45,9 +45,9 @@ const isVerdict = (v: unknown): v is Verdict =>
   typeof v === 'object' && v !== null && ['verified', 'unverified'].includes(String((v as Verdict).verdict))
 const isAudit = (v: unknown): v is Audit => typeof v === 'object' && v !== null && Array.isArray((v as Audit).items)
 
-/** One haiku call, parsed as JSON; undefined when it did not answer or answered prose. */
-async function haiku($: EngineInterface, system: string, prompt: string, maxTokens = 1024): Promise<unknown> {
-  const r = await $.model.complete({ model: 'haiku', system, prompt, maxTokens, effort: 'low', timeoutMs: 30000 })
+/** One opus call, parsed as JSON; undefined when it did not answer or answered prose. */
+async function opus($: EngineInterface, system: string, prompt: string, maxTokens = 1024): Promise<unknown> {
+  const r = await $.model.complete({ model: 'opus', system, prompt, maxTokens, effort: 'low', timeoutMs: 60000 })
   if (!r.isAnswered) return undefined
   try {
     return JSON.parse(r.text.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, '').trim())
@@ -97,7 +97,7 @@ async function evidence($: EngineInterface, last: number) {
 
 // ponytail: no item cap; 4096 tokens is room for ~100 items, the pane scrolls (engine-owned) past bodyRows
 async function extract($: EngineInterface, planText: string) {
-  const items = await haiku($, EXTRACT, planText, 4096)
+  const items = await opus($, EXTRACT, planText, 4096)
   return isStrings(items) ? items.map(s => s.slice(0, 120)) : undefined
 }
 
@@ -162,8 +162,8 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
 }
 
 /**
- * Audits every non-verified item in one haiku call, reading the tool calls and (when given) Claude's final reply;
- * never un-verifies. `quiet` toasts only when something new is verified. Returns what haiku said, or undefined.
+ * Audits every non-verified item in one opus call, reading the tool calls and (when given) Claude's final reply;
+ * never un-verifies. `quiet` toasts only when something new is verified. Returns what opus said, or undefined.
  */
 async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: string } = {}): Promise<Audit | undefined> {
   const before = await save($, t => ({ ...t, busy: 'verify' }))
@@ -172,7 +172,7 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
   const prompt =
     `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
     `Developer's final reply:\n${(opts.reply || '(none)').slice(0, 4000)}`
-  const answer = await haiku($, AUDIT, prompt, 4096)
+  const answer = await opus($, AUDIT, prompt, 4096)
   const audit = isAudit(answer) ? answer : undefined
   const verdicts = audit?.items.filter(isVerdict) ?? []
   const after = await save($, ({ busy: _busy, ...t }) => {
@@ -299,7 +299,7 @@ export const register: Register = on => {
       activePlan = found.plan.id
     }
     const prompt = `Item #${id}: ${found.item.text}\nDeveloper's claim: ${String(e.evidence ?? '')}\n\nRecent tool calls:\n${await evidence($, 40)}`
-    const verdict = await haiku($, VERIFY, prompt)
+    const verdict = await opus($, VERIFY, prompt)
     const checked = isVerdict(verdict)
     const status = checked && verdict.verdict === 'verified' ? 'verified' : 'claimed'
     const reason = checked ? verdict.reason : 'verifier unavailable'
