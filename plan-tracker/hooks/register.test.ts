@@ -122,7 +122,9 @@ describe('plan-tracker', () => {
 
     const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
 
-    expect((ran.result as { message: string }).message).toContain('verified')
+    // a registered tool's result is a string or content blocks; the engine refuses an object
+    expect(typeof ran.result).toBe('string')
+    expect(ran.result).toContain('verified')
     expect(seen.state?.plans[0]?.items[0]?.status).toBe('verified')
   })
 
@@ -132,10 +134,22 @@ describe('plan-tracker', () => {
 
     const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'done' })
 
-    expect((ran.result as { message: string }).message).toContain('no edit on a.ts')
+    expect(typeof ran.result).toBe('string')
+    expect(ran.result).toContain('no edit on a.ts')
     const item = seen.state?.plans[0]?.items[0]
     expect(item?.status).toBe('claimed')
     expect(item?.note).toBe('no edit on a.ts')
+  })
+
+  test('mark_done on an unknown id answers a string, no haiku', async ($, on) => {
+    const calls = haiku(on, () => '{"verdict":"verified","reason":"x"}')
+    await start($, on, seeded([[1, 'open']]))
+
+    const ran = await $.tool.call({ tool: MARK, id: 9, evidence: 'done' })
+
+    expect(calls.n).toBe(0)
+    expect(typeof ran.result).toBe('string')
+    expect(ran.result).toContain('#9')
   })
 
   test('compose lists open and claimed items', async ($, on) => {

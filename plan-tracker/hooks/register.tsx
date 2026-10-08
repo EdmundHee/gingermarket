@@ -226,7 +226,8 @@ export const register: Register = on => {
   on('tool.call', { tool: MARK }, async ($, e) => {
     const id = Number(e.id)
     const found = findItem(await read($, tracker), id)
-    if (!found) return { result: { ok: false, message: `No plan item #${id}.` } }
+    // a registered tool answers as an MCP tool does: a string or content blocks, never an object
+    if (!found) return { result: `No plan item #${id}.` }
     const prompt = `Item #${id}: ${found.item.text}\nDeveloper's claim: ${String(e.evidence ?? '')}\n\nRecent tool calls:\n${await evidence($, 40)}`
     const verdict = await haiku($, VERIFY, prompt)
     const checked = isVerdict(verdict)
@@ -237,7 +238,7 @@ export const register: Register = on => {
       status === 'verified'
         ? `Item #${id} verified.`
         : `Item #${id} marked but NOT verified: ${reason}. Finish it, then mark again with better evidence.`
-    return { result: { ok: true, id, status, message } }
+    return { result: message }
   })
 
   on('prompt.compose', async ($, e, next) => {
