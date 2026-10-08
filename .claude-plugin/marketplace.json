@@ -12,7 +12,7 @@
     },
     {
       "name": "plan-tracker",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "source": "./plan-tracker",
       "description": "Plan tracker pane: items of every approved plan, Claude marks them done, haiku verifies each mark, click an item to send Claude to work on it."
     }
