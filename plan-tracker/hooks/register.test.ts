@@ -26,8 +26,8 @@ const seeded = (items: Array<[number, PlanItem['status'], Partial<PlanItem>?]>, 
 const audit = (items: Array<[number, 'verified' | 'unverified', string]>, reply = 'partial', why = 'more to do') =>
   JSON.stringify({ items: items.map(([id, verdict, reason]) => ({ id, verdict, reason })), reply, why })
 
-/** Fakes haiku: every `$.model.complete` beneath the plugin answers `reply(e)`. Returns the call count. */
-function haiku(on: On, reply: (e: { system?: string; prompt: string }) => string) {
+/** Fakes opus: every `$.model.complete` beneath the plugin answers `reply(e)`. Returns the call count. */
+function opus(on: On, reply: (e: { system?: string; prompt: string }) => string) {
   const calls = { n: 0 }
   on('model.complete', (_$, e) => {
     calls.n += 1
@@ -99,8 +99,8 @@ const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', 
 const startTurn = ($: Engine, text = 'Work on plan item #1: item 1') => $.turn.start({ text, turnId: 't2' })
 
 describe('plan-tracker', () => {
-  test('approval adds a group with haiku\'s items', async ($, on) => {
-    haiku(on, () => '["edit a", "test b"]')
+  test('approval adds a group with opus\'s items', async ($, on) => {
+    opus(on, () => '["edit a", "test b"]')
     approved(on)
     const seen = await start($, on)
 
@@ -114,7 +114,7 @@ describe('plan-tracker', () => {
   })
 
   test('rejected plan adds nothing', async ($, on) => {
-    const calls = haiku(on, () => '["never"]')
+    const calls = opus(on, () => '["never"]')
     on('tool.call', { tool: 'ExitPlanMode' }, () => ({ isError: true as const, result: 'rejected', text: 'The user rejected the plan.' }))
     const seen = await start($, on)
 
@@ -125,8 +125,8 @@ describe('plan-tracker', () => {
     expect(calls.n).toBe(0)
   })
 
-  test('mark_done verified by haiku', async ($, on) => {
-    haiku(on, () => '{"verdict":"verified","reason":"Edit on a.ts seen"}')
+  test('mark_done verified by opus', async ($, on) => {
+    opus(on, () => '{"verdict":"verified","reason":"Edit on a.ts seen"}')
     const seen = await start($, on, seeded([[1, 'open']]))
 
     const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
@@ -138,7 +138,7 @@ describe('plan-tracker', () => {
   })
 
   test('mark_done unverified becomes claimed', async ($, on) => {
-    haiku(on, () => '{"verdict":"unverified","reason":"no edit on a.ts"}')
+    opus(on, () => '{"verdict":"unverified","reason":"no edit on a.ts"}')
     const seen = await start($, on, seeded([[1, 'open']]))
 
     const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'done' })
@@ -150,8 +150,8 @@ describe('plan-tracker', () => {
     expect(item?.note).toBe('no edit on a.ts')
   })
 
-  test('mark_done on an unknown id answers a string, no haiku', async ($, on) => {
-    const calls = haiku(on, () => '{"verdict":"verified","reason":"x"}')
+  test('mark_done on an unknown id answers a string, no opus', async ($, on) => {
+    const calls = opus(on, () => '{"verdict":"verified","reason":"x"}')
     await start($, on, seeded([[1, 'open']]))
 
     const ran = await $.tool.call({ tool: MARK, id: 9, evidence: 'done' })
@@ -205,7 +205,7 @@ describe('plan-tracker', () => {
   })
 
   test('verify all applies verdicts without unverifying', async ($, on) => {
-    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'still no test']], 'done'))
+    opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'still no test']], 'done'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'claimed', { note: 'no test run' }], [3, 'verified']]))
 
     const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
@@ -217,7 +217,7 @@ describe('plan-tracker', () => {
   })
 
   test('turn end audits open items after an edit', async ($, on) => {
-    const calls = haiku(on, () => audit([[1, 'verified', 'edit seen']], 'done'))
+    const calls = opus(on, () => audit([[1, 'verified', 'edit seen']], 'done'))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await edit($)
@@ -228,8 +228,8 @@ describe('plan-tracker', () => {
     expect(seen.store.get(KEY)).toEqual(seen.state)
   })
 
-  test('turn end without work calls no haiku', async ($, on) => {
-    const calls = haiku(on, () => audit([[1, 'verified', 'x']]))
+  test('turn end without work calls no opus', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'x']]))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await $.tool.call({ tool: 'Read', file_path: '/tmp/a.ts' })
@@ -239,8 +239,8 @@ describe('plan-tracker', () => {
     expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
   })
 
-  test('turn end with everything verified calls no haiku', async ($, on) => {
-    const calls = haiku(on, () => audit([]))
+  test('turn end with everything verified calls no opus', async ($, on) => {
+    const calls = opus(on, () => audit([]))
     await start($, on, seeded([[1, 'verified']]))
 
     await edit($)
@@ -249,8 +249,8 @@ describe('plan-tracker', () => {
     expect(calls.n).toBe(0)
   })
 
-  test('subagent and aborted turns call no haiku', async ($, on) => {
-    const calls = haiku(on, () => audit([[1, 'verified', 'x']]))
+  test('subagent and aborted turns call no opus', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'x']]))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await edit($)
@@ -271,7 +271,7 @@ describe('plan-tracker', () => {
   })
 
   test('second approval adds a group on top', async ($, on) => {
-    haiku(on, () => '["x"]')
+    opus(on, () => '["x"]')
     approved(on, '# Second plan\n\n1. x\n')
     const seen = await start($, on, seeded([[1, 'open']]))
 
@@ -284,7 +284,7 @@ describe('plan-tracker', () => {
   })
 
   test('failed extraction leaves a retry', async ($, on) => {
-    haiku(on, () => 'Sorry, I cannot help with that.')
+    opus(on, () => 'Sorry, I cannot help with that.')
     approved(on)
     const seen = await start($, on)
 
@@ -306,7 +306,7 @@ describe('plan-tracker', () => {
   })
 
   test('plan turn sends the leftovers back as one prompt', async ($, on) => {
-    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'no test'], [3, 'unverified', 'untouched']], 'partial', 'said #3 is next'))
+    opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'no test'], [3, 'unverified', 'untouched']], 'partial', 'said #3 is next'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open'], [3, 'open']]))
 
     await startTurn($)
@@ -322,7 +322,7 @@ describe('plan-tracker', () => {
   })
 
   test('blocked reply notes the group and sends nothing', async ($, on) => {
-    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'blocked', 'asked which DB'))
+    opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'blocked', 'asked which DB'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
 
     await startTurn($)
@@ -335,7 +335,7 @@ describe('plan-tracker', () => {
   })
 
   test('nudge cap leaves the item to the user', async ($, on) => {
-    haiku(on, () => audit([[2, 'unverified', 'still untouched']], 'partial'))
+    opus(on, () => audit([[2, 'unverified', 'still untouched']], 'partial'))
     const seen = await start($, on, seeded([[1, 'verified'], [2, 'open', { nudges: 2 }]]))
 
     await startTurn($, 'Work on plan item #2: item 2')
@@ -348,7 +348,7 @@ describe('plan-tracker', () => {
   })
 
   test('typed turn audits but sends nothing', async ($, on) => {
-    const calls = haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'partial'))
+    const calls = opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'partial'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
 
     await startTurn($, 'fix the typo')
@@ -361,7 +361,7 @@ describe('plan-tracker', () => {
   })
 
   test('approval turn with no work audits and nudges', async ($, on) => {
-    const calls = haiku(on, e =>
+    const calls = opus(on, e =>
       e.system?.startsWith(AUDIT_SYS)
         ? audit([[1, 'unverified', 'not started'], [2, 'unverified', 'not started']], 'partial', 'stopped after approval')
         : '["edit a", "test b"]',
@@ -379,7 +379,7 @@ describe('plan-tracker', () => {
   })
 
   test('mark_done turn nudges the rest', async ($, on) => {
-    haiku(on, e =>
+    opus(on, e =>
       e.system?.startsWith(AUDIT_SYS)
         ? audit([[2, 'unverified', 'untouched']], 'done', 'says all done')
         : '{"verdict":"verified","reason":"Edit seen"}',
@@ -396,7 +396,7 @@ describe('plan-tracker', () => {
   })
 
   test('unparsed audit sends nothing', async ($, on) => {
-    haiku(on, () => 'Sorry, I cannot help with that.')
+    opus(on, () => 'Sorry, I cannot help with that.')
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await startTurn($)
@@ -420,9 +420,9 @@ describe('plan-tracker', () => {
     expect(seen.submitted).toHaveLength(2)
   })
 
-  test('approval keeps every item haiku lists', async ($, on) => {
+  test('approval keeps every item opus lists', async ($, on) => {
     const forty = Array.from({ length: 40 }, (_, n) => `step ${n + 1}`)
-    haiku(on, () => JSON.stringify(forty))
+    opus(on, () => JSON.stringify(forty))
     approved(on)
     const seen = await start($, on)
 
@@ -453,5 +453,25 @@ describe('plan-tracker', () => {
 
     expect(await pane.find({ type: 'Text', text: /↻1/ })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /waiting on you: which DB/ })).toBeDefined()
+  })
+
+  test('every call asks opus', async ($, on) => {
+    const models: string[] = []
+    on('model.complete', (_$, e) => {
+      models.push(e.model)
+      const text = e.system?.startsWith('You extract') ? '["edit a"]'
+        : e.system?.startsWith(AUDIT_SYS) ? audit([[1, 'unverified', 'x']], 'done')
+        : '{"verdict":"unverified","reason":"x"}'
+      return { value: { isAnswered: true as const, text, usage: USAGE } }
+    })
+    approved(on)
+    await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a' })
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'verify-all' })
+
+    expect(models).toEqual(['opus', 'opus', 'opus'])
   })
 })
