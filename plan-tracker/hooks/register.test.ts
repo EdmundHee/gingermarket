@@ -2,23 +2,29 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
-import type { Tracker } from '../types'
+import type { PlanItem, Tracker } from '../types'
 
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const PLAN = '# Fix the thing\n\n## Context\nwhy\n\n## Change\n1. edit a\n2. test b\n'
 const MARK = 'mcp__plan-tracker__mark_done'
+const AUDIT_SYS = 'You audit which' // the turn-end / Verify-all system prompt; mark_done's starts "You audit whether"
 const PANE = {
   title: 'Plan', isFocused: false, bodyColumns: 80, placement: 'dock' as const,
   scroll: { offset: 0, bodyRows: 30 }, view: {},
 }
 
-const seeded = (items: Array<[number, Tracker['plans'][0]['items'][0]['status'], string?]>): Tracker => ({
+const seeded = (items: Array<[number, PlanItem['status'], Partial<PlanItem>?]>, note?: string): Tracker => ({
   nextId: items.length + 1,
   plans: [{
     id: 'p1', title: 'Seeded', file: '/tmp/seeded.md', approvedAt: '2026-10-08T00:00:00.000Z',
-    items: items.map(([id, status, note]) => ({ id, text: `item ${id}`, status, ...(note ? { note } : {}) })),
+    items: items.map(([id, status, patch]) => ({ id, text: `item ${id}`, status, ...patch })),
+    ...(note ? { note } : {}),
   }],
 })
+
+/** An audit reply in the shape the turn-end audit expects. */
+const audit = (items: Array<[number, 'verified' | 'unverified', string]>, reply = 'partial', why = 'more to do') =>
+  JSON.stringify({ items: items.map(([id, verdict, reason]) => ({ id, verdict, reason })), reply, why })
 
 /** Fakes haiku: every `$.model.complete` beneath the plugin answers `reply(e)`. Returns the call count. */
 function haiku(on: On, reply: (e: { system?: string; prompt: string }) => string) {
@@ -89,6 +95,9 @@ const endTurn = ($: Engine, over: { agentId?: string; reason?: 'answer' | 'abort
 
 const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
 
+/** A turn begins as the tracker's own work prompt (plan work) unless `text` says otherwise. */
+const startTurn = ($: Engine, text = 'Work on plan item #1: item 1') => $.turn.start({ text, turnId: 't2' })
+
 describe('plan-tracker', () => {
   test('approval adds a group with haiku\'s items', async ($, on) => {
     haiku(on, () => '["edit a", "test b"]')
@@ -153,7 +162,7 @@ describe('plan-tracker', () => {
   })
 
   test('compose lists open and claimed items', async ($, on) => {
-    await start($, on, seeded([[1, 'open'], [2, 'claimed', 'no test run'], [3, 'verified']]))
+    await start($, on, seeded([[1, 'open'], [2, 'claimed', { note: 'no test run' }], [3, 'verified']]))
 
     const { sections } = await $.prompt.compose({
       model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'],
@@ -196,8 +205,8 @@ describe('plan-tracker', () => {
   })
 
   test('verify all applies verdicts without unverifying', async ($, on) => {
-    haiku(on, () => '[{"id":1,"verdict":"verified","reason":"ok"},{"id":2,"verdict":"unverified","reason":"still no test"}]')
-    const seen = await start($, on, seeded([[1, 'open'], [2, 'claimed', 'no test run'], [3, 'verified']]))
+    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'still no test']], 'done'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'claimed', { note: 'no test run' }], [3, 'verified']]))
 
     const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
     await pane.press({ key: 'verify-all' })
@@ -208,7 +217,7 @@ describe('plan-tracker', () => {
   })
 
   test('turn end audits open items after an edit', async ($, on) => {
-    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"edit seen"}]')
+    const calls = haiku(on, () => audit([[1, 'verified', 'edit seen']], 'done'))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await edit($)
@@ -220,7 +229,7 @@ describe('plan-tracker', () => {
   })
 
   test('turn end without work calls no haiku', async ($, on) => {
-    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"x"}]')
+    const calls = haiku(on, () => audit([[1, 'verified', 'x']]))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await $.tool.call({ tool: 'Read', file_path: '/tmp/a.ts' })
@@ -231,7 +240,7 @@ describe('plan-tracker', () => {
   })
 
   test('turn end with everything verified calls no haiku', async ($, on) => {
-    const calls = haiku(on, () => '[]')
+    const calls = haiku(on, () => audit([]))
     await start($, on, seeded([[1, 'verified']]))
 
     await edit($)
@@ -241,7 +250,7 @@ describe('plan-tracker', () => {
   })
 
   test('subagent and aborted turns call no haiku', async ($, on) => {
-    const calls = haiku(on, () => '[{"id":1,"verdict":"verified","reason":"x"}]')
+    const calls = haiku(on, () => audit([[1, 'verified', 'x']]))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     await edit($)
@@ -294,5 +303,129 @@ describe('plan-tracker', () => {
     const seen = await start($, on, stored)
 
     expect(seen.state).toEqual(stored)
+  })
+
+  test('plan turn sends the leftovers back as one prompt', async ($, on) => {
+    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'no test'], [3, 'unverified', 'untouched']], 'partial', 'said #3 is next'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open'], [3, 'open']]))
+
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toMatch(/^Work on plan items #2 #3:/)
+    expect(seen.submitted[0]).toContain('no test')
+    expect(seen.submitted[0]).not.toContain('#1')
+    const items = seen.state?.plans[0]?.items ?? []
+    expect(items.map(i => [i.status, i.nudges ?? 0])).toEqual([['verified', 0], ['open', 1], ['open', 1]])
+  })
+
+  test('blocked reply notes the group and sends nothing', async ($, on) => {
+    haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'blocked', 'asked which DB'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(0)
+    expect(seen.state?.plans[0]?.note).toContain('asked which DB')
+    expect(seen.state?.plans[0]?.items[1]?.nudges ?? 0).toBe(0)
+  })
+
+  test('nudge cap leaves the item to the user', async ($, on) => {
+    haiku(on, () => audit([[2, 'unverified', 'still untouched']], 'partial'))
+    const seen = await start($, on, seeded([[1, 'verified'], [2, 'open', { nudges: 2 }]]))
+
+    await startTurn($, 'Work on plan item #2: item 2')
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(0)
+    expect(seen.state?.plans[0]?.note).toContain('#2')
+    expect(seen.state?.plans[0]?.note).toContain('▶')
+  })
+
+  test('typed turn audits but sends nothing', async ($, on) => {
+    const calls = haiku(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'partial'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    await startTurn($, 'fix the typo')
+    await edit($)
+    await endTurn($)
+
+    expect(calls.n).toBe(1)
+    expect(seen.submitted).toHaveLength(0)
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('verified')
+  })
+
+  test('approval turn with no work audits and nudges', async ($, on) => {
+    const calls = haiku(on, e =>
+      e.system?.startsWith(AUDIT_SYS)
+        ? audit([[1, 'unverified', 'not started'], [2, 'unverified', 'not started']], 'partial', 'stopped after approval')
+        : '["edit a", "test b"]',
+    )
+    approved(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await endTurn($)
+
+    expect(calls.n).toBe(2)
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toContain('#1 #2')
+    expect(seen.submitted[0]).toContain('Fix the thing')
+  })
+
+  test('mark_done turn nudges the rest', async ($, on) => {
+    haiku(on, e =>
+      e.system?.startsWith(AUDIT_SYS)
+        ? audit([[2, 'unverified', 'untouched']], 'done', 'says all done')
+        : '{"verdict":"verified","reason":"Edit seen"}',
+    )
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    await startTurn($, 'do the plan')
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toContain('#2')
+    expect(seen.submitted[0]).not.toContain('#1')
+  })
+
+  test('unparsed audit sends nothing', async ($, on) => {
+    haiku(on, () => 'Sorry, I cannot help with that.')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(0)
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
+    expect(seen.state?.plans[0]?.note).toBeUndefined()
+  })
+
+  test('multi-id work prompt clears every queued id', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    await pane.press({ key: 'work:1' })
+    expect(seen.submitted).toHaveLength(1)
+
+    await startTurn($, 'Work on plan items #1 #2:\n#1 item 1\n#2 item 2')
+    await pane.press({ key: 'work:1' })
+    expect(seen.submitted).toHaveLength(2)
+  })
+
+  test('pane shows nudges and the group note', async ($, on) => {
+    await start($, on, seeded([[1, 'open', { nudges: 1 }]], 'waiting on you: which DB'))
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    expect(await pane.find({ type: 'Text', text: /↻1/ })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /waiting on you: which DB/ })).toBeDefined()
   })
 })

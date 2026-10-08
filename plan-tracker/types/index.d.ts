@@ -1,6 +1,6 @@
 export type PlanItemStatus = 'open' | 'claimed' | 'verified'
 
-export type PlanItem = { id: number; text: string; status: PlanItemStatus; note?: string }
+export type PlanItem = { id: number; text: string; status: PlanItemStatus; note?: string; nudges?: number }
 
 export type PlanGroup = {
   id: string
