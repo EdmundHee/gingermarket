@@ -15,6 +15,7 @@ Add this marketplace to Claude Code:
 | Plugin | Description | Install |
 |---|---|---|
 | **ralph-helper** | Plan-aware orchestrator for ralph-loop with automatic phase execution, test gating, and rollback | `/plugin install ralph-helper@gingermarket` |
+| **plan-tracker** | Plan pane for approved plans: Claude marks items done, haiku verifies each mark, click an item to send Claude to work on it | `/plugin install plan-tracker@gingermarket` |
 
 ## Adding Plugins
 

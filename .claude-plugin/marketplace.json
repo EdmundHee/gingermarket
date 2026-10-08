@@ -9,6 +9,12 @@
       "version": "0.4.0",
       "source": "./ralph-helper",
       "description": "Self-improving, plan-aware orchestrator for ralph-loop. Decomposes a plan into phases, injects unit tests, drives execution with test gating/rollback/regression checks, and learns per project via Obsidian memory + graphify search."
+    },
+    {
+      "name": "plan-tracker",
+      "version": "0.2.0",
+      "source": "./plan-tracker",
+      "description": "Plan tracker pane: items of every approved plan, Claude marks them done, haiku verifies each mark, click an item to send Claude to work on it."
     }
   ]
 }
