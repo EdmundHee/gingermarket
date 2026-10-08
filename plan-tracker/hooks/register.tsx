@@ -4,6 +4,7 @@ import type { EngineInterface, Register, ToolUseSummary } from 'claude-code'
 import type { PlanGroup, PlanItem, Tracker } from '../types'
 
 const PANE = 'plan-tracker'
+const DOCK_COLUMNS = 48 // width when docked beside a fullscreen transcript; inline ignores it
 const MARK = 'mcp__plan-tracker__mark_done'
 const EMPTY: Tracker = { nextId: 1, plans: [] }
 const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
@@ -163,12 +164,14 @@ export const register: Register = on => {
       },
     })
     await $.command.register({ name: 'plan-tracker', description: 'Open the plan tracker pane', argumentHint: '[reset]' })
-    void $.ui.open({ id: PANE, title: 'Plan' })
+    void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
     return next(e)
   })
 
   on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
     const ran = await next(e)
+    // smoke-check only, removed once the rejection shape is confirmed as isError
+    $.ui.log(`plan-tracker: ExitPlanMode ${ran.isError ? 'isError' : 'ok'} ${JSON.stringify(ran.result ?? null).slice(0, 160)}`, { to: 'debug' })
     if (e.agentId !== undefined || ran.deny !== undefined || ran.isError) return ran
     try {
       const result = ran.result as { plan?: string | null; filePath?: string } | undefined
@@ -223,12 +226,18 @@ export const register: Register = on => {
       await save($, () => EMPTY)
       return { text: 'Plan tracker wiped.' }
     }
-    const opened = await $.ui.open({ id: PANE, title: 'Plan' })
+    const opened = await $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
     return { text: opened.isPlaced ? 'Plan tracker pane opened.' : `Plan tracker pane waits: ${opened.reason}` }
   })
 
+  let seatLogged = false
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button } = $.ui.resolve(e)
+    if (!seatLogged) {
+      // smoke-check only: where the surface seated the pane
+      seatLogged = true
+      $.ui.log(`plan-tracker: placement=${e.props.placement} fullscreen=${String(e.viewport?.isFullscreen)} columns=${String(e.viewport?.columns)} body=${e.props.bodyColumns}`)
+    }
     const t = await read($, tracker)
     if (t.plans.length === 0) {
       return (
