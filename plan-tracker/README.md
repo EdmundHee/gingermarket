@@ -27,15 +27,24 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   `/plan-tracker reset` wipes the tracker for this project.
 - Status line: `plan 2/7`.
 - At the end of every turn in which Claude edited a file or ran a command, the tracker audits the
-  open items itself (one haiku call): `✓` marks land without Claude calling `mark_done`.
+  open items itself (one haiku call): `✓` marks land without Claude calling `mark_done`. The audit
+  reads Claude's final reply too, not only the tool calls.
+- When a **plan turn** ends with items unverified, the tracker sends them back on its own. A plan
+  turn is the approval turn, a turn started by `▶` or an earlier nudge, or a turn in which Claude
+  called `mark_done`. Claude's reply decides what happens:
+  - blocked on you (asked a question, needs a decision, hit an error it could not fix) → nothing is
+    sent; the group reads `waiting on you: …`.
+  - otherwise → one `Work on plan items #a #b` prompt is queued, each item with the verifier's reason.
+  - two auto-nudges per item, then the row shows `↻2` and the group asks you to press `▶` or `✓`.
+  A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
 
 A second approval adds a new group on top; a fully verified group collapses to one line.
 
 ## Cost
 
-One haiku call per approval, per `mark_done`, per `Verify all`, and per turn that touched files while
-items are open. Nothing on a read-only turn.
+One haiku call per approval, per `mark_done`, per `Verify all`, per turn that touched files while
+items are open, and per plan turn (even one that only talked). Nothing on a read-only typed turn.
 
 ## Where things are kept
 
