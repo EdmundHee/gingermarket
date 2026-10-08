@@ -22,8 +22,8 @@ let storeKey = ''
 
 const EXTRACT =
   'You extract a checklist from an implementation plan. Return ONLY a JSON array of strings: each one concrete ' +
-  'deliverable or verification step a developer ticks off, in plan order, at most 120 characters each, at most 25 ' +
-  'items. Skip context, background and rejected alternatives.'
+  'deliverable or verification step a developer ticks off, in plan order, at most 120 characters each. ' +
+  'Skip context, background and rejected alternatives.'
 const VERIFY =
   "You audit whether a plan item was completed, from the developer's claim and the recent tool calls (file edits, " +
   'commands, outputs). Reply ONLY with JSON {"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}. ' +
@@ -95,9 +95,10 @@ async function evidence($: EngineInterface, last: number) {
   return lines.join('\n').slice(-12000) || '(no tool calls yet)'
 }
 
+// ponytail: no item cap; 4096 tokens is room for ~100 items, the pane scrolls (engine-owned) past bodyRows
 async function extract($: EngineInterface, planText: string) {
-  const items = await haiku($, EXTRACT, planText, 2048)
-  return isStrings(items) ? items.slice(0, 25).map(s => s.slice(0, 120)) : undefined
+  const items = await haiku($, EXTRACT, planText, 4096)
+  return isStrings(items) ? items.map(s => s.slice(0, 120)) : undefined
 }
 
 const newItems = (t: Tracker, texts: string[]): PlanItem[] => texts.map((text, n) => ({ id: t.nextId + n, text, status: 'open' }))
@@ -171,7 +172,7 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
   const prompt =
     `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
     `Developer's final reply:\n${(opts.reply || '(none)').slice(0, 4000)}`
-  const answer = await haiku($, AUDIT, prompt, 2048)
+  const answer = await haiku($, AUDIT, prompt, 4096)
   const audit = isAudit(answer) ? answer : undefined
   const verdicts = audit?.items.filter(isVerdict) ?? []
   const after = await save($, ({ busy: _busy, ...t }) => {
@@ -316,9 +317,9 @@ export const register: Register = on => {
     const t = await read($, tracker)
     const open = t.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
     if (open.length === 0) return r
-    const lines = open
-      .slice(0, 30)
-      .map(i => (i.status === 'claimed' ? `#${i.id} [claimed, unverified: ${i.note ?? ''}] ${i.text}` : `#${i.id} [open] ${i.text}`))
+    const lines = open.map(i =>
+      i.status === 'claimed' ? `#${i.id} [claimed, unverified: ${i.note ?? ''}] ${i.text}` : `#${i.id} [open] ${i.text}`,
+    )
     const text = [
       '# Plan tracker',
       'Items from approved plans still open in this project:',

@@ -39,7 +39,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
 
-A second approval adds a new group on top; a fully verified group collapses to one line.
+A second approval adds a new group on top; a fully verified group collapses to one line. There is no
+cap on items: a list taller than the pane scrolls (arrows or wheel while the pane is focused).
 
 ## Cost
 

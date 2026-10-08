@@ -31,6 +31,8 @@ run: `claude plugin test plan-tracker`
 | TC-024 | verifier unavailable never nudges | unit | #1 open; audit haiku answers prose | plan turn, Edit, complete | no submit; #1 open; no group note | plan-tracker/hooks/register.test.ts > unparsed audit sends nothing | pass |
 | TC-025 | multi-id prompt clears the queue | unit | #1 #2 open; pane mounted | 1. press `work:1` 2. `$.turn.start` text `Work on plan items #1 #2:` 3. press `work:1` | submits: 1 after step 1, 2 after step 3 | plan-tracker/hooks/register.test.ts > multi-id work prompt clears every queued id | pass |
 | TC-026 | pane shows group note and nudge count | unit | #1 open `nudges: 1`; group note `waiting on you: which DB` | mount pane | a Text matches `↻1`, another `waiting on you: which DB` | plan-tracker/hooks/register.test.ts > pane shows nudges and the group note | pass |
+| TC-027 | extraction has no item cap | unit | empty store; haiku answers 40 strings | 1. approve plan | group holds 40 items, the last `step 40` | plan-tracker/hooks/register.test.ts > approval keeps every item haiku lists | pass |
+| TC-028 | system prompt lists every open item | unit | 40 open items; tools include mark_done | 1. `$.prompt.compose()` | section `plan-tracker:open` contains `#40 [open] item 40` | plan-tracker/hooks/register.test.ts > compose lists every open item | pass |
 
 ## Rules
 
