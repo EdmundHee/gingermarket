@@ -13,6 +13,8 @@ const WORK = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
 const NUDGES = 2 // auto-nudges per item before the pane asks for you
 const WORK_PROMPT = /^Work on plan items? ((?:#\d+ ?)+):/
 let worked = 0 // main-loop WORK calls in the running turn
+const REMIND_EVERY = 3 // ponytail: one reminder per 3 work calls; drop to 1 if marks still arrive late
+let sinceMark = 0 // main-loop WORK calls since the last mark_done or reminder
 let planTurn = false // this main turn was plan work: approval, a tracker prompt, or a mark_done
 let activePlan: string | undefined // group the nudge targets; falls back to the newest
 const queued = new Set<number>() // items whose work prompt waits for an idle session
@@ -260,6 +262,7 @@ export const register: Register = on => {
 
   on('turn.start', async ($, e, next) => {
     worked = 0
+    sinceMark = 0
     planTurn = false
     const ids = (WORK_PROMPT.exec(e.text)?.[1]?.match(/\d+/g) ?? []).map(Number)
     if (ids.length) {
@@ -270,9 +273,21 @@ export const register: Register = on => {
     return next(e)
   })
 
-  on('tool.call', ($, e, next) => {
-    if (e.agentId === undefined && WORK.has(e.tool)) worked += 1
-    return next(e)
+  // The system prompt alone does not get marks mid-turn; a line after the tool result, as a PostToolUse reminder, does.
+  on('tool.call', async ($, e, next) => {
+    const r = await next(e)
+    if (e.agentId !== undefined || !WORK.has(e.tool)) return r
+    worked += 1
+    if (r.deny !== undefined || ++sinceMark < REMIND_EVERY) return r
+    const open = openItems(await read($, tracker))
+    if (open.length === 0) return r
+    sinceMark = 0
+    const rows = open.slice(0, 10).map(i => `#${i.id} ${i.text.slice(0, 60)}`).join(' · ')
+    const more = open.length > 10 ? ` +${open.length - 10} more` : ''
+    const line =
+      `plan-tracker: still open: ${rows}${more}. If this call finished one of them, call mark_done now ` +
+      '(its id + one line of evidence) before the next step. Never batch marks at the end of the turn.'
+    return { ...r, context: [...(r.context ?? []), line] }
   })
 
   // ponytail: awaited, not fire-and-forget; work left running after a hook returns may be dropped with its dispatch
@@ -317,6 +332,7 @@ export const register: Register = on => {
     }
     if (e.agentId === undefined) {
       planTurn = true
+      sinceMark = 0
       activePlan = found.plan.id
     }
     const prompt = `Item #${id}: ${found.item.text}\nDeveloper's claim: ${String(e.evidence ?? '')}\n\nRecent tool calls:\n${await evidence($, 40)}`

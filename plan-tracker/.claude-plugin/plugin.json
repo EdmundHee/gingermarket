@@ -1,6 +1,6 @@
 {
   "name": "plan-tracker",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Tracks approved plan items in a pane: Claude marks, opus verifies, click an item to send Claude to work on it.",
   "author": { "name": "Edmund Hee" },
   "types": "./types/index.d.ts"

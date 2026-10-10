@@ -37,6 +37,9 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   - otherwise → one `Work on plan items #a #b` prompt is queued, each item with the verifier's reason.
   - two auto-nudges per item, then the row shows `↻2` and the group asks you to press `▶` or `✓`.
   A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
+- Every third file edit or command while items are open adds one reminder line to the tool result,
+  which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
+  restarts the count, so marks land as the work does, not at the end of the turn.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
 
 A second approval adds a new group on top; approving the same plan text again (say, re-shown after
@@ -46,7 +49,7 @@ cap on items: a list taller than the pane scrolls (arrows or wheel while the pan
 ## Cost
 
 One opus call (60 s timeout) per approval, per `mark_done`, per `Verify all`, per turn that touched files while
-items are open, and per plan turn (even one that only talked). Nothing on a read-only typed turn.
+items are open, and per plan turn (even one that only talked). Nothing on a read-only typed turn. The mid-turn reminder costs no model call.
 
 ## Where things are kept
 
