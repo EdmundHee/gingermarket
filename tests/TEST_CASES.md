@@ -35,6 +35,9 @@ run: `claude plugin test plan-tracker`
 | TC-028 | system prompt lists every open item | unit | 40 open items; tools include mark_done | 1. `$.prompt.compose()` | section `plan-tracker:open` contains `#40 [open] item 40` | plan-tracker/hooks/register.test.ts > compose lists every open item | pass |
 | TC-029 | opus only | unit | empty store; fake records `e.model` | 1. approve a plan 2. `$.tool.call mark_done {id:1, evidence}` 3. press `verify-all` | every `model.complete` call has `model: 'opus'` | plan-tracker/hooks/register.test.ts > every call asks opus | pass |
 | TC-030 | verifier sees long output tail | unit | #1 open; transcript has one Bash output: `HEAD-MARK`, 200 pass lines, then `(fail) TAIL-MARK Received: ["haiku"]` | 1. `$.tool.call mark_done {id:1, evidence}` | verifier prompt contains `HEAD-MARK` and `TAIL-MARK Received: ["haiku"]` | plan-tracker/hooks/register.test.ts > verifier sees the head and tail of a long tool output | pass |
+| TC-031 | same plan approved again | unit | empty store; opus extract `["a","b"]` | 1. approve PLAN 2. approve PLAN again (same text) | one group, items still #1 #2, nextId 3, opus called once | plan-tracker/hooks/register.test.ts > approving the same plan again keeps its group and ids | pass |
+| TC-032 | same plan approved after failed extraction | unit | empty store; opus answers prose first, then `["a"]` | 1. approve PLAN 2. approve PLAN again | one group holding #1 `a`; the empty group is gone | plan-tracker/hooks/register.test.ts > approving the same plan after a failed extraction replaces the empty group | pass |
+| TC-033 | mark_done unknown id lists open items | unit | #1 open, #2 verified, #3 claimed | 1. `$.tool.call mark_done {id:9, evidence}` | result names `#9`, lists `#1 item 1` and `#3 item 3`, not `#2` | plan-tracker/hooks/register.test.ts > mark_done on an unknown id lists the open items | pass |
 
 ## Rules
 
