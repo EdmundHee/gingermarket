@@ -38,6 +38,9 @@ run: `claude plugin test plan-tracker`
 | TC-031 | same plan approved again | unit | empty store; opus extract `["a","b"]` | 1. approve PLAN 2. approve PLAN again (same text) | one group, items still #1 #2, nextId 3, opus called once | plan-tracker/hooks/register.test.ts > approving the same plan again keeps its group and ids | pass |
 | TC-032 | same plan approved after failed extraction | unit | empty store; opus answers prose first, then `["a"]` | 1. approve PLAN 2. approve PLAN again | one group holding #1 `a`; the empty group is gone | plan-tracker/hooks/register.test.ts > approving the same plan after a failed extraction replaces the empty group | pass |
 | TC-033 | mark_done unknown id lists open items | unit | #1 open, #2 verified, #3 claimed | 1. `$.tool.call mark_done {id:9, evidence}` | result names `#9`, lists `#1 item 1` and `#3 item 3`, not `#2` | plan-tracker/hooks/register.test.ts > mark_done on an unknown id lists the open items | pass |
+| TC-034 | mid-turn mark reminder | unit | #1 open; session started | 1. `$.tool.call Edit` ×3 on the main loop | results 1 and 2 carry no `plan-tracker:` context; result 3 `context` has one line containing `#1 item 1` and `mark_done` | plan-tracker/hooks/register.test.ts > third work call reminds about open items | pass |
+| TC-035 | reminder needs open items | unit | #1 open; pane mounted | 1. `$.tool.call Edit` ×3 with `agentId: 'sub'` 2. press `✓` on #1 3. `$.tool.call Edit` ×3 on the main loop | no result carries a `plan-tracker:` context line | plan-tracker/hooks/register.test.ts > no reminder when nothing is open or in a subagent | pass |
+| TC-036 | mark_done resets the reminder | unit | #1 #2 open; opus answers verified | 1. Edit ×2 2. `$.tool.call mark_done #1` 3. Edit ×2 4. Edit | results of steps 1 and 3 carry no reminder; step 4 result names `#2` and not `#1` | plan-tracker/hooks/register.test.ts > mark_done restarts the reminder count | pass |
 
 ## Rules
 

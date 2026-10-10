@@ -529,4 +529,51 @@ describe('plan-tracker', () => {
     expect(prompts[0]).toContain('HEAD-MARK')
     expect(prompts[0]).toContain('TAIL-MARK Received: ["haiku"]')
   })
+
+  /** The tracker's reminder line on a tool result, if any. */
+  const reminder = (r: { context?: readonly string[] }) => (r.context ?? []).filter(c => c.startsWith('plan-tracker:'))
+
+  test('third work call reminds about open items', async ($, on) => {
+    await start($, on, seeded([[1, 'open']]))
+
+    const first = await edit($)
+    const second = await edit($)
+    const third = await edit($)
+
+    expect(reminder(first)).toHaveLength(0)
+    expect(reminder(second)).toHaveLength(0)
+    expect(reminder(third)).toHaveLength(1)
+    expect(reminder(third)[0]).toContain('#1 item 1')
+    expect(reminder(third)[0]).toContain('mark_done')
+  })
+
+  test('no reminder when nothing is open or in a subagent', async ($, on) => {
+    await start($, on, seeded([[1, 'open']]))
+    // the typed args leave agentId out; the test's engine `$` passes the input whole, as a subagent's loop does
+    const subEdit = { tool: 'Edit' as const, file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b', agentId: 'sub' }
+    const sub = () => $.tool.call(subEdit)
+
+    const inSub = [await sub(), await sub(), await sub()]
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'done:1' })
+    const onMain = [await edit($), await edit($), await edit($)]
+
+    expect(inSub.flatMap(reminder)).toHaveLength(0)
+    expect(onMain.flatMap(reminder)).toHaveLength(0)
+  })
+
+  test('mark_done restarts the reminder count', async ($, on) => {
+    opus(on, () => '{"verdict":"verified","reason":"edit shown"}')
+    await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    const before = [await edit($), await edit($)]
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
+    const after = [await edit($), await edit($)]
+    const due = await edit($)
+
+    expect([...before, ...after].flatMap(reminder)).toHaveLength(0)
+    expect(reminder(due)).toHaveLength(1)
+    expect(reminder(due)[0]).toContain('#2 item 2')
+    expect(reminder(due)[0]).not.toContain('#1 ')
+  })
 })
