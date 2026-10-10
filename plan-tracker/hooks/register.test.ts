@@ -161,6 +161,18 @@ describe('plan-tracker', () => {
     expect(ran.result).toContain('#9')
   })
 
+  test('mark_done on an unknown id lists the open items', async ($, on) => {
+    opus(on, () => '{"verdict":"verified","reason":"x"}')
+    await start($, on, seeded([[1, 'open'], [2, 'verified'], [3, 'claimed']]))
+
+    const ran = await $.tool.call({ tool: MARK, id: 9, evidence: 'done' })
+
+    expect(ran.result).toContain('#9')
+    expect(ran.result).toContain('#1 item 1')
+    expect(ran.result).toContain('#3 item 3')
+    expect(ran.result).not.toContain('#2')
+  })
+
   test('compose lists open and claimed items', async ($, on) => {
     await start($, on, seeded([[1, 'open'], [2, 'claimed', { note: 'no test run' }], [3, 'verified']]))
 
@@ -281,6 +293,34 @@ describe('plan-tracker', () => {
     expect(t?.plans.map(p => p.title)).toEqual(['Second plan', 'Seeded'])
     expect(t?.plans[0]?.items[0]?.id).toBe(2)
     expect(t?.plans[1]?.items[0]?.status).toBe('open')
+  })
+
+  test('approving the same plan again keeps its group and ids', async ($, on) => {
+    const calls = opus(on, () => '["a","b"]')
+    approved(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    const t = seen.state
+    expect(t?.plans).toHaveLength(1)
+    expect(t?.plans[0]?.items.map(i => i.id)).toEqual([1, 2])
+    expect(t?.nextId).toBe(3)
+    expect(calls.n).toBe(1)
+  })
+
+  test('approving the same plan after a failed extraction replaces the empty group', async ($, on) => {
+    const calls = opus(on, () => (calls.n === 1 ? 'Sorry, I cannot help with that.' : '["a"]'))
+    approved(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    const t = seen.state
+    expect(t?.plans).toHaveLength(1)
+    expect(t?.plans[0]?.items.map(i => [i.id, i.text])).toEqual([[1, 'a']])
   })
 
   test('failed extraction leaves a retry', async ($, on) => {

@@ -56,6 +56,11 @@ async function opus($: EngineInterface, system: string, prompt: string, maxToken
   }
 }
 
+const openItems = (t: Tracker) => t.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
+
+// ponytail: 32-bit string hash, enough to spot the same plan text approved twice
+const hashOf = (s: string) => String([...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 0))
+
 function status(t: Tracker) {
   const items = t.plans.flatMap(p => p.items)
   return items.length ? `plan ${items.filter(i => i.status === 'verified').length}/${items.length}` : undefined
@@ -110,13 +115,21 @@ const newItems = (t: Tracker, texts: string[]): PlanItem[] => texts.map((text, n
 /** Adds the approved plan as a new group on top; returns its id. */
 async function addPlan($: EngineInterface, planText: string, file: string) {
   const title = planText.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? file.split('/').pop() ?? 'Plan'
+  const hash = hashOf(planText)
+  // the same text approved again (re-shown after /compact) keeps its group, so Claude's ids stay valid
+  const same = (await read($, tracker)).plans.find(p => p.hash === hash && p.items.length > 0)
+  if (same) {
+    $.ui.toast(`tracker: "${title}" already tracked`)
+    return same.id
+  }
   const texts = await extract($, planText)
   const id = String(Date.now())
   await save($, t => {
     const items = newItems(t, texts ?? [])
-    const group: PlanGroup = { id, title, file, approvedAt: new Date().toISOString(), items }
+    const group: PlanGroup = { id, title, file, hash, approvedAt: new Date().toISOString(), items }
     if (!texts) group.note = 'could not extract items; press extract again'
-    return { ...t, nextId: t.nextId + items.length, plans: [group, ...t.plans] }
+    const plans = t.plans.filter(p => !(p.hash === hash && p.items.length === 0)) // a failed copy of this plan
+    return { ...t, nextId: t.nextId + items.length, plans: [group, ...plans] }
   })
   $.ui.toast(texts ? `tracker: ${texts.length} items from "${title}"` : `tracker: could not extract items from "${title}"`)
   return id
@@ -171,7 +184,7 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
  */
 async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: string } = {}): Promise<Audit | undefined> {
   const before = await save($, t => ({ ...t, busy: 'verify' }))
-  const pending = before.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
+  const pending = openItems(before)
   const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ' (developer claims done)' : ''}`).join('\n')
   const prompt =
     `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
@@ -295,9 +308,13 @@ export const register: Register = on => {
 
   on('tool.call', { tool: MARK }, async ($, e) => {
     const id = Number(e.id)
-    const found = findItem(await read($, tracker), id)
+    const t = await read($, tracker)
+    const found = findItem(t, id)
     // a registered tool answers as an MCP tool does: a string or content blocks, never an object
-    if (!found) return { result: `No plan item #${id}.` }
+    if (!found) {
+      const open = openItems(t).map(i => `#${i.id} ${i.text}`)
+      return { result: `No plan item #${id}.${open.length ? ` Open items:\n${open.join('\n')}` : ''}` }
+    }
     if (e.agentId === undefined) {
       planTurn = true
       activePlan = found.plan.id
@@ -319,7 +336,7 @@ export const register: Register = on => {
     const r = await next(e)
     if (!(e.tools ?? []).includes(MARK)) return r
     const t = await read($, tracker)
-    const open = t.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
+    const open = openItems(t)
     if (open.length === 0) return r
     const lines = open.map(i =>
       i.status === 'claimed' ? `#${i.id} [claimed, unverified: ${i.note ?? ''}] ${i.text}` : `#${i.id} [open] ${i.text}`,

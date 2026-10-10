@@ -6,6 +6,7 @@ export type PlanGroup = {
   id: string
   title: string
   file: string
+  hash?: string // of the plan text; the same text approved again keeps this group
   approvedAt: string
   items: PlanItem[]
   note?: string
