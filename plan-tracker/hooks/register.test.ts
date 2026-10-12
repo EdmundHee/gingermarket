@@ -46,6 +46,23 @@ function approved(on: On, plan = PLAN) {
 
 const CWD = '/tmp/plan-tracker-test'
 const KEY = `tracker:${CWD}`
+const DOC = '# Parser Implementation Plan\n\n### Task 1: Parser\n- [ ] **Step 1: test**\n\n### Task 2: CLI\n- [ ] **Step 1: test**\n'
+
+/** Fakes the Skill and Write tools and the file system beneath the plugin; returns the paths read. */
+function docs(on: On, doc = DOC, listing: Array<{ name: string; mtimeMs: number }> = []) {
+  const reads: string[] = []
+  on('tool.call', { tool: 'Skill' }, (_$, e) => ({ result: { success: true, commandName: String(e.skill) }, text: 'Launching skill' }))
+  on('tool.call', { tool: 'Write' }, () => ({ result: { type: 'create' as const, filePath: 'x' } }))
+  on('fs.read', (_$, e) => {
+    reads.push(e.path)
+    return { value: doc }
+  })
+  on('fs.list', () => ({ value: listing.map(f => ({ ...f, kind: 'file' as const, size: 1, isLink: false })) }))
+  return reads
+}
+
+/** An Edit inside the repo unless `path` says otherwise. */
+const repoEdit = ($: Engine, path = `${CWD}/src/a.ts`) => $.tool.call({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b' })
 
 /** An in-memory `$.store` the test can read; `mock.store` would hide it. */
 function fakeStore(on: On, entries: Record<string, unknown>) {
@@ -63,6 +80,7 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
     state: undefined as Tracker | undefined,
     store: fakeStore(on, tracker ? { [KEY]: tracker } : {}),
     submitted: [] as string[],
+    toasts: [] as string[],
   }
   on('state.set', { plugin: 'plan-tracker', key: 'tracker' }, (_$, e, next) => {
     seen.state = e.value as Tracker
@@ -74,7 +92,10 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
   on('session.messages', () => ({ value: messages as never }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
   on('ui.status', () => ({ value: undefined }))
-  on('ui.toast', () => ({ value: undefined }))
+  on('ui.toast', (_$, e) => {
+    seen.toasts.push(e.text)
+    return { value: undefined }
+  })
   on('ui.log', () => ({ value: undefined }))
   on('prompt.compose', () => ({ sections: [] }))
   on('prompt.submit', (_$, e) => {
@@ -575,5 +596,136 @@ describe('plan-tracker', () => {
     expect(reminder(due)).toHaveLength(1)
     expect(reminder(due)[0]).toContain('#2 item 2')
     expect(reminder(due)[0]).not.toContain('#1 ')
+  })
+
+  test('execution skill tracks the plan doc by task heading', async ($, on) => {
+    const calls = opus(on, () => '["never"]')
+    const reads = docs(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'Skill', skill: 'superpowers:executing-plans', args: 'docs/superpowers/plans/p.md' })
+
+    const group = seen.state?.plans[0]
+    expect(seen.state?.plans).toHaveLength(1)
+    expect(group?.items.map(i => [i.text, i.status])).toEqual([['Task 1: Parser', 'open'], ['Task 2: CLI', 'open']])
+    // the engine resolves a relative path before the op, so the plugin resolves it against the session cwd itself
+    expect(group?.file).toBe(`${CWD}/docs/superpowers/plans/p.md`)
+    expect(reads).toEqual([`${CWD}/docs/superpowers/plans/p.md`])
+    expect(calls.n).toBe(0)
+  })
+
+  test('execution skill falls back to the last plan doc written', async ($, on) => {
+    const reads = docs(on)
+    const seen = await start($, on)
+    const doc = `${CWD}/docs/superpowers/plans/q.md`
+
+    await $.tool.call({ tool: 'Write', file_path: doc, content: DOC })
+    await $.tool.call({ tool: 'Skill', skill: 'superpowers:subagent-driven-development' })
+
+    expect(reads).toEqual([doc])
+    expect(seen.state?.plans).toHaveLength(1)
+  })
+
+  test('execution skill falls back to the newest plan doc on disk', async ($, on) => {
+    const reads = docs(on, DOC, [{ name: 'old.md', mtimeMs: 1 }, { name: 'new.md', mtimeMs: 2 }, { name: 'notes.txt', mtimeMs: 3 }])
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'Skill', skill: 'superpowers:executing-plans' })
+
+    expect(reads).toEqual([`${CWD}/docs/superpowers/plans/new.md`])
+    expect(seen.state?.plans).toHaveLength(1)
+  })
+
+  test('a non-execution skill tracks nothing', async ($, on) => {
+    const reads = docs(on)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'Skill', skill: 'superpowers:brainstorming' })
+
+    expect(seen.state?.plans ?? []).toHaveLength(0)
+    expect(reads).toHaveLength(0)
+  })
+
+  test('a doc without task headings falls back to opus', async ($, on) => {
+    const calls = opus(on, () => '["a","b"]')
+    docs(on, PLAN)
+    const seen = await start($, on)
+
+    await $.tool.call({ tool: 'Skill', skill: 'superpowers:executing-plans', args: 'docs/superpowers/plans/p.md' })
+
+    expect(calls.n).toBe(1)
+    expect(seen.state?.plans[0]?.items.map(i => i.text)).toEqual(['a', 'b'])
+  })
+
+  test('first repo edit tracks the typed prompt once', async ($, on) => {
+    const calls = opus(on, () => '["add x","test x"]')
+    const seen = await start($, on)
+
+    await startTurn($, 'add x with a test')
+    await repoEdit($)
+    await repoEdit($)
+
+    const group = seen.state?.plans[0]
+    expect(calls.n).toBe(1)
+    expect(seen.state?.plans).toHaveLength(1)
+    expect(group?.title).toBe('add x with a test')
+    expect(group?.items.map(i => i.text)).toEqual(['add x', 'test x'])
+    expect(group?.file).toBe('')
+  })
+
+  test('edits outside the repo or in docs/superpowers track no prompt', async ($, on) => {
+    const calls = opus(on, () => '["x"]')
+    const seen = await start($, on)
+
+    await startTurn($, 'write the spec')
+    await edit($)
+    await repoEdit($, `${CWD}-other/a.ts`)
+    await repoEdit($, `${CWD}/docs/superpowers/specs/s.md`)
+    await $.tool.call({ tool: 'Read', file_path: `${CWD}/src/a.ts` })
+
+    expect(calls.n).toBe(0)
+    expect(seen.state?.plans ?? []).toHaveLength(0)
+  })
+
+  test('a prompt with nothing to do adds no group', async ($, on) => {
+    opus(on, () => '[]')
+    const seen = await start($, on)
+
+    await startTurn($, 'tidy up')
+    await repoEdit($)
+
+    expect(seen.state?.plans ?? []).toHaveLength(0)
+    expect(seen.store.has(KEY)).toBe(false)
+    expect(seen.toasts).toHaveLength(0)
+  })
+
+  test('a follow-up prompt gets its own group', async ($, on) => {
+    const prompts: string[] = []
+    on('model.complete', (_$, e) => {
+      prompts.push(e.prompt)
+      const text = prompts.length === 1 ? '["add x","test x"]' : '["fix y"]'
+      return { value: { isAnswered: true as const, text, usage: USAGE } }
+    })
+    const seen = await start($, on)
+
+    await startTurn($, 'add x with a test')
+    await repoEdit($)
+    await startTurn($, 'also fix y')
+    await repoEdit($)
+
+    const t = seen.state
+    expect(t?.plans.map(p => p.title)).toEqual(['also fix y', 'add x with a test'])
+    expect(t?.plans[0]?.items.map(i => [i.id, i.text])).toEqual([[3, 'fix y']])
+    expect(prompts[1]).toContain('#1 add x')
+    expect(prompts[1]).toContain('#2 test x')
+  })
+
+  test('pane shows the plan file path', async ($, on) => {
+    const base = seeded([[1, 'open']])
+    await start($, on, { ...base, plans: base.plans.map(p => ({ ...p, file: `${CWD}/docs/superpowers/plans/p.md` })) })
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    expect(await pane.find({ type: 'Text', text: 'docs/superpowers/plans/p.md' })).toBeDefined()
   })
 })

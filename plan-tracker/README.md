@@ -1,7 +1,7 @@
 # plan-tracker
 
-A Claude Code mod. Every plan you approve in plan mode becomes a group of items in a **Plan** pane
-beside the transcript. Claude marks an item with `mark_done`, opus checks the claim
+A Claude Code mod. Whatever task is running becomes a group of items in a **Plan** pane beside the
+transcript: a superpowers plan doc, a plan approved in plan mode, or a task you typed. Claude marks an item with `mark_done`, opus checks the claim
 against the recent tool calls, and the pane shows `○` open, `⚠` claimed but unverified (with the
 verifier's reason), `✓` verified. The open items are also listed in Claude's system prompt every
 turn, so the plan is never out of sight.
@@ -18,7 +18,18 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 
 ## Use
 
-- Approve a plan → toast `tracker: N items from "<title>"`, items appear in the pane.
+- Three sources make a group, toast `tracker: N items from "<title>"`:
+  - **superpowers plan doc**: Claude starts `executing-plans` or `subagent-driven-development`. The doc
+    is the `.md` path in the skill's args, else the plan doc last written this session, else the newest
+    in `docs/superpowers/plans/`. One item per `### Task N:` heading, no model call; a doc without them
+    goes to opus.
+  - **plan mode**: approving a plan.
+  - **typed task**, in any permission mode: the first edit of a repo file in a turn you typed. Opus pulls
+    the checklist from your prompt, leaving out what is already tracked; a prompt with nothing new adds no
+    group. Edits outside the repo or under `docs/superpowers/` (specs, plan docs, vault notes, memory,
+    plan-mode drafts) never count, so questions and planning turns stay untracked. Each typed task gets its
+    own group.
+- A group from a file shows its path (relative to the project) under the title.
 - `▶` on an item sends Claude to work on it (a new turn, with the item and the plan file named).
 - `✓` on an item marks it verified by hand, for when the verifier is wrong.
 - `Verify all` re-audits every non-verified item in one opus call. Never un-verifies.
@@ -30,14 +41,14 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   open items itself (one opus call): `✓` marks land without Claude calling `mark_done`. The audit
   reads Claude's final reply too, not only the tool calls.
 - When a **plan turn** ends with items unverified, the tracker sends them back on its own. A plan
-  turn is the approval turn, a turn started by `▶` or an earlier nudge, or a turn in which Claude
-  called `mark_done`. Claude's reply decides what happens:
+  turn is the turn a group was added in (any source), a turn started by `▶` or an earlier nudge, or a
+  turn in which Claude called `mark_done`. Claude's reply decides what happens:
   - blocked on you (asked a question, needs a decision, hit an error it could not fix) → nothing is
     sent; the group reads `waiting on you: …`.
   - otherwise → one `Work on plan items #a #b` prompt is queued, each item with the verifier's reason.
   - two auto-nudges per item, then the row shows `↻2` and the group asks you to press `▶` or `✓`.
   A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
-- Every third file edit or command while items are open adds one reminder line to the tool result,
+- Every third file edit, command or subagent dispatch while items are open adds one reminder line to the tool result,
   which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
   restarts the count, so marks land as the work does, not at the end of the turn.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
@@ -48,8 +59,10 @@ cap on items: a list taller than the pane scrolls (arrows or wheel while the pan
 
 ## Cost
 
-One opus call (60 s timeout) per approval, per `mark_done`, per `Verify all`, per turn that touched files while
-items are open, and per plan turn (even one that only talked). Nothing on a read-only typed turn. The mid-turn reminder costs no model call.
+One opus call (60 s timeout) per plan-mode approval, per typed task (on its first repo edit, which waits for
+it), per `mark_done`, per `Verify all`, per turn that touched files while items are open, and per plan turn
+(even one that only talked). A plan doc with `### Task` headings costs nothing to extract. Nothing on a
+read-only typed turn. The mid-turn reminder costs no model call.
 
 ## Where things are kept
 
