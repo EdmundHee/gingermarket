@@ -8,8 +8,13 @@ const DOCK_COLUMNS = 48 // width when docked beside a fullscreen transcript; inl
 const MARK = 'mcp__plan-tracker__mark_done'
 const EMPTY: Tracker = { nextId: 1, plans: [] }
 const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
-/** Tools whose call could finish an item; a turn with none ends without an audit. */
-const WORK = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Bash'])
+const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+/** Tools whose call could finish an item; a turn with none ends without an audit. Agent: subagent-driven runs. */
+const WORK = new Set([...EDITS, 'Bash', 'Agent'])
+/** Skills that run a superpowers plan doc; their start is the doc's approval. */
+const EXECUTE = /(^|:)(executing-plans|subagent-driven-development)$/
+const DOCS = 'docs/superpowers/plans'
+const PLAN_DOC = /\/docs\/superpowers\/plans\/[^/]+\.md$/
 const NUDGES = 2 // auto-nudges per item before the pane asks for you
 const WORK_PROMPT = /^Work on plan items? ((?:#\d+ ?)+):/
 let worked = 0 // main-loop WORK calls in the running turn
@@ -21,11 +26,14 @@ const queued = new Set<number>() // items whose work prompt waits for an idle se
 
 // ponytail: keyed by the start cwd; follow /cd if it ever matters
 let storeKey = ''
+let cwd = ''
+let prompt = '' // the typed text of the running turn, until its first repo edit tracks it
+let lastDoc: string | undefined // the plan doc last written this session
 
 const EXTRACT =
-  'You extract a checklist from an implementation plan. Return ONLY a JSON array of strings: each one concrete ' +
-  'deliverable or verification step a developer ticks off, in plan order, at most 120 characters each. ' +
-  'Skip context, background and rejected alternatives.'
+  "You extract a checklist from an implementation plan or a developer's task request. Return ONLY a JSON array of " +
+  'strings: each one concrete deliverable or verification step a developer ticks off, in order, at most 120 ' +
+  'characters each. Skip context, background and rejected alternatives. Return [] when it asks for no new change.'
 const VERIFY =
   "You audit whether a plan item was completed, from the developer's claim and the recent tool calls (file edits, " +
   'commands, outputs). Reply ONLY with JSON {"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}. ' +
@@ -112,11 +120,25 @@ async function extract($: EngineInterface, planText: string) {
   return isStrings(items) ? items.map(s => s.slice(0, 120)) : undefined
 }
 
+/** A superpowers plan's `### Task N: name` headings, one item each; any other text goes to opus. */
+async function itemsOf($: EngineInterface, text: string) {
+  const tasks = [...text.matchAll(/^###\s+(Task\s+\d+:.+)$/gm)].map(m => (m[1] ?? '').trim().slice(0, 120))
+  return tasks.length ? tasks : extract($, text)
+}
+
 const newItems = (t: Tracker, texts: string[]): PlanItem[] => texts.map((text, n) => ({ id: t.nextId + n, text, status: 'open' }))
 
-/** Adds the approved plan as a new group on top; returns its id. */
-async function addPlan($: EngineInterface, planText: string, file: string) {
-  const title = planText.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? file.split('/').pop() ?? 'Plan'
+/**
+ * Adds a plan (or, with no `file`, a typed task) as a new group on top; returns its id. `extra` goes to the
+ * extractor only. A task with nothing to track adds no group and returns undefined.
+ */
+async function addPlan(
+  $: EngineInterface,
+  planText: string,
+  file: string,
+  title = planText.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? file.split('/').pop() ?? 'Plan',
+  extra = '',
+) {
   const hash = hashOf(planText)
   // the same text approved again (re-shown after /compact) keeps its group, so Claude's ids stay valid
   const same = (await read($, tracker)).plans.find(p => p.hash === hash && p.items.length > 0)
@@ -124,7 +146,8 @@ async function addPlan($: EngineInterface, planText: string, file: string) {
     $.ui.toast(`tracker: "${title}" already tracked`)
     return same.id
   }
-  const texts = await extract($, planText)
+  const texts = await itemsOf($, planText + extra)
+  if (!file && !texts?.length) return undefined // no file to extract again from
   const id = String(Date.now())
   await save($, t => {
     const items = newItems(t, texts ?? [])
@@ -137,7 +160,28 @@ async function addPlan($: EngineInterface, planText: string, file: string) {
   return id
 }
 
-const setGroupNote = (t: Tracker, planId: string, note: string | undefined): Tracker => ({
+/** Tracks the running turn's typed task as its own group, told what is already tracked so it adds only new work. */
+async function trackPrompt($: EngineInterface) {
+  const text = prompt
+  prompt = ''
+  const open = openItems(await read($, tracker)).map(i => `#${i.id} ${i.text}`)
+  const extra = open.length ? `\n\nAlready tracked, leave these out:\n${open.join('\n')}` : ''
+  // ponytail: one opus call (~5-15 s) holds this edit's result; move it to turn.complete if that delay bites
+  const id = await addPlan($, text, '', text.trim().split('\n')[0]?.slice(0, 60), extra)
+  if (id) {
+    activePlan = id
+    planTurn = true
+  }
+}
+
+/** The newest `.md` in the superpowers plans folder, for an execution skill started without a path. */
+async function newestDoc($: EngineInterface) {
+  const entries = await $.fs.list(`${cwd}/${DOCS}`).catch(() => [])
+  const newest = entries.filter(f => f.kind === 'file' && f.name.endsWith('.md')).sort((a, b) => b.mtimeMs - a.mtimeMs)[0]
+  return newest && `${cwd}/${DOCS}/${newest.name}`
+}
+
+const setGroupNote =(t: Tracker, planId: string, note: string | undefined): Tracker => ({
   ...t,
   plans: t.plans.map(p => {
     if (p.id !== planId) return p
@@ -149,7 +193,7 @@ const setGroupNote = (t: Tracker, planId: string, note: string | undefined): Tra
 async function reextract($: EngineInterface, plan: PlanGroup) {
   await save($, t => ({ ...t, busy: 'extract' }))
   const text = await $.fs.read(plan.file).catch(() => '')
-  const texts = text ? await extract($, text) : undefined
+  const texts = text ? await itemsOf($, text) : undefined
   await save($, ({ busy: _busy, ...t }) => {
     const items = newItems(t, texts ?? [])
     const plans = t.plans.map(p => {
@@ -232,9 +276,12 @@ async function nudge($: EngineInterface, audit: Audit | undefined) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    storeKey = `tracker:${e.cwd}`
+    cwd = e.cwd
+    storeKey = `tracker:${cwd}`
     planTurn = false
     activePlan = undefined
+    prompt = ''
+    lastDoc = undefined
     const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
     await update($, tracker, () => stored)
     $.ui.status(status(stored))
@@ -265,6 +312,7 @@ export const register: Register = on => {
     sinceMark = 0
     planTurn = false
     const ids = (WORK_PROMPT.exec(e.text)?.[1]?.match(/\d+/g) ?? []).map(Number)
+    prompt = ids.length || !e.text.trim() ? '' : e.text // the tracker's own prompts and continuations never count
     if (ids.length) {
       planTurn = true
       ids.forEach(id => queued.delete(id))
@@ -278,6 +326,12 @@ export const register: Register = on => {
     const r = await next(e)
     if (e.agentId !== undefined || !WORK.has(e.tool)) return r
     worked += 1
+    if (EDITS.has(e.tool) && r.deny === undefined) {
+      const path = String('file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : '')
+      if (PLAN_DOC.test(path)) lastDoc = path
+      // a repo file, not a spec or plan doc, a vault note, a memory file or a plan-mode draft
+      if (prompt && path.startsWith(`${cwd}/`) && !path.includes('/docs/superpowers/')) await trackPrompt($)
+    }
     if (r.deny !== undefined || ++sinceMark < REMIND_EVERY) return r
     const open = openItems(await read($, tracker))
     if (open.length === 0) return r
@@ -314,6 +368,26 @@ export const register: Register = on => {
       if (text) {
         activePlan = await addPlan($, text, file)
         planTurn = true
+        prompt = ''
+      }
+    } catch (err) {
+      $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
+    }
+    return ran
+  })
+
+  // A superpowers plan doc is tracked when the skill that runs it starts: by then the doc is final.
+  on('tool.call', { tool: 'Skill' }, async ($, e, next) => {
+    const ran = await next(e)
+    if (e.agentId !== undefined || ran.deny !== undefined || ran.isError || !EXECUTE.test(String(e.skill))) return ran
+    try {
+      const found = String(e.args ?? '').match(/[\w./-]+\.md\b/)?.[0] ?? lastDoc ?? (await newestDoc($))
+      const file = found && (found.startsWith('/') ? found : `${cwd}/${found}`)
+      const text = file ? await $.fs.read(file) : ''
+      if (file && text) {
+        activePlan = await addPlan($, text, file)
+        planTurn = true
+        prompt = ''
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -359,7 +433,7 @@ export const register: Register = on => {
     )
     const text = [
       '# Plan tracker',
-      'Items from approved plans still open in this project:',
+      'Items from tracked plans and tasks still open in this project:',
       ...lines,
       'Call mark_done right after you finish each item, before starting the next, with its id and one line of evidence. Never mark what you have not done.',
     ].join('\n')
@@ -389,7 +463,7 @@ export const register: Register = on => {
     if (t.plans.length === 0) {
       return (
         <Box flexDirection="column">
-          <Text dimColor>No approved plan yet. Approve one in plan mode.</Text>
+          <Text dimColor>No plan tracked yet. Run a superpowers plan, approve one in plan mode, or give Claude a task.</Text>
         </Box>
       )
     }
@@ -428,6 +502,9 @@ export const register: Register = on => {
             <Text dimColor>{count}</Text>
             <Button key={`remove:${plan.id}`} plain dimColor onPress={() => save($, s => ({ ...s, plans: s.plans.filter(p => p.id !== plan.id) }))}>x</Button>
           </Box>
+          {plan.file !== '' && (
+            <Text dimColor wrap="truncate-start">{plan.file.startsWith(`${cwd}/`) ? plan.file.slice(cwd.length + 1) : plan.file}</Text>
+          )}
           {!done && plan.items.map(item => row(plan, item))}
           {!done && plan.note !== undefined && <Text dimColor wrap="truncate">{plan.note}</Text>}
           {plan.items.length === 0 && (
