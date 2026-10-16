@@ -15,6 +15,9 @@ const WORK = new Set([...EDITS, 'Bash', 'Agent'])
 const EXECUTE = /(^|:)(executing-plans|subagent-driven-development)$/
 const DOCS = 'docs/superpowers/plans'
 const PLAN_DOC = /\/docs\/superpowers\/plans\/[^/]+\.md$/
+/** The pane's sections, in order; a group's source follows from its file. */
+const SOURCES = [['docs', 'PLAN DOCS'], ['mode', 'PLAN MODE'], ['tasks', 'TASKS']] as const
+const sourceOf = (p: PlanGroup) => (p.file === '' ? 'tasks' : PLAN_DOC.test(p.file) ? 'docs' : 'mode')
 const NUDGES = 2 // auto-nudges per item before the pane asks for you
 const WORK_PROMPT = /^Work on plan items? ((?:#\d+ ?)+):/
 let worked = 0 // main-loop WORK calls in the running turn
@@ -490,22 +493,25 @@ export const register: Register = on => {
       </Box>
     )
 
-    const group = (plan: PlanGroup) => {
+    const verified = (items: PlanItem[]) => items.filter(i => i.status === 'verified').length
+
+    const group = (plan: PlanGroup, n: number) => {
       const done = plan.items.length > 0 && plan.items.every(i => i.status === 'verified')
-      const count = `${plan.items.filter(i => i.status === 'verified').length}/${plan.items.length}`
+      const ok = verified(plan.items)
+      const filled = plan.items.length ? Math.round((ok / plan.items.length) * 10) : 0
       return (
-        <Box flexDirection="column">
+        <Box flexDirection="column" marginLeft={2} marginTop={n > 0 ? 1 : 0}>
           <Box flexDirection="row" gap={1}>
             <Box flexGrow={1}>
               <Text bold={!done} dimColor={done} wrap="truncate">{`${done ? '✓ ' : ''}${plan.title}`}</Text>
             </Box>
-            <Text dimColor>{count}</Text>
+            <Text dimColor>{`${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)} ${ok}/${plan.items.length}`}</Text>
             <Button key={`remove:${plan.id}`} plain dimColor onPress={() => save($, s => ({ ...s, plans: s.plans.filter(p => p.id !== plan.id) }))}>x</Button>
           </Box>
-          {plan.file !== '' && (
+          {plan.file !== '' && !done && (
             <Text dimColor wrap="truncate-start">{plan.file.startsWith(`${cwd}/`) ? plan.file.slice(cwd.length + 1) : plan.file}</Text>
           )}
-          {!done && plan.items.map(item => row(plan, item))}
+          {!done && <Box flexDirection="column" marginLeft={2}>{plan.items.map(item => row(plan, item))}</Box>}
           {!done && plan.note !== undefined && <Text dimColor wrap="truncate">{plan.note}</Text>}
           {plan.items.length === 0 && (
             <Button key="extract-again" onPress={() => reextract($, plan)}>{t.busy === 'extract' ? 'extracting…' : 'extract again'}</Button>
@@ -516,7 +522,22 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
-        {t.plans.map(group)}
+        {SOURCES.map(([source, label]) => {
+          const plans = t.plans.filter(p => sourceOf(p) === source)
+          if (plans.length === 0) return null
+          const items = plans.flatMap(p => p.items)
+          return (
+            <Box flexDirection="column">
+              <Box key={`section:${source}`} flexDirection="row" gap={1}>
+                <Box flexGrow={1}>
+                  <Text bold>{label}</Text>
+                </Box>
+                <Text dimColor>{`${verified(items)}/${items.length}`}</Text>
+              </Box>
+              {plans.map(group)}
+            </Box>
+          )
+        })}
         {pending && (
           <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
         )}

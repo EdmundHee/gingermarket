@@ -29,6 +29,9 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
     group. Edits outside the repo or under `docs/superpowers/` (specs, plan docs, vault notes, memory,
     plan-mode drafts) never count, so questions and planning turns stay untracked. Each typed task gets its
     own group.
+- The pane splits groups into sections by source: `PLAN DOCS`, `PLAN MODE`, `TASKS` (empty ones
+  hidden), each with its verified/total. A group sits indented under its section with a progress bar
+  `▰▰▱▱▱▱▱▱▱▱ 2/10`; its items sit indented under it.
 - A group from a file shows its path (relative to the project) under the title.
 - `▶` on an item sends Claude to work on it (a new turn, with the item and the plan file named).
 - `✓` on an item marks it verified by hand, for when the verifier is wrong.
