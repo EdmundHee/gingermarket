@@ -51,6 +51,8 @@ run: `claude plugin test plan-tracker`
 | TC-044 | follow-up prompt | unit | group from TC-041 with #1 #2 open; opus extract `["fix y"]` | 1. new typed turn `also fix y` 2. repo Edit | two groups, new on top with #3; extract prompt lists #1 #2 as already tracked | plan-tracker/hooks/register.test.ts > a follow-up prompt gets its own group | pass |
 | TC-045 | pane shows plan file | unit | seeded group with `file: CWD/docs/superpowers/plans/p.md` | 1. render Pane | text `docs/superpowers/plans/p.md` drawn | plan-tracker/hooks/register.test.ts > pane shows the plan file path | pass |
 | TC-046 | execution start, newest doc on disk | unit | empty store; fs.list of `docs/superpowers/plans` answers `old.md` (mtime 1), `new.md` (mtime 2), `notes.txt` (mtime 3) | 1. `$.tool.call Skill {skill:'superpowers:executing-plans'}` with no args and no plan doc written | fs.read called with `CWD/docs/superpowers/plans/new.md`; one group | plan-tracker/hooks/register.test.ts > execution skill falls back to the newest plan doc on disk | pass |
+| TC-047 | pane sections by source | unit | groups with file `''`, `<cwd>/docs/superpowers/plans/x.md`, `~/.claude/plans/y.md` | 1. mount Pane | Box keys `section:docs`, `section:mode`, `section:tasks` in that order; headers show `PLAN DOCS` and verified/total per section | plan-tracker/hooks/register.test.ts > pane_groups_from_three_sources_shows_three_sections | pass |
+| TC-048 | pane sections, typed tasks only | unit | one group with file `''` | 1. mount Pane | `section:tasks` present; no `section:docs`, no `section:mode` | plan-tracker/hooks/register.test.ts > pane_with_only_typed_tasks_shows_only_tasks_section | pass |
 
 ## Rules
 
