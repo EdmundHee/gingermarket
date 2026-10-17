@@ -21,12 +21,6 @@
       "version": "0.1.0",
       "source": "./git-tracker",
       "description": "Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists."
-    },
-    {
-      "name": "design-tracker",
-      "version": "0.1.0",
-      "source": "./design-tracker",
-      "description": "Design pane beside plan-tracker and git-tracker: the Claude Design canvas and library this project is tied to, each artboard by page with its draft/approved tag and build state (not started, in progress, done)."
     }
   ]
 }
