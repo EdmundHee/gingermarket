@@ -728,4 +728,37 @@ describe('plan-tracker', () => {
 
     expect(await pane.find({ type: 'Text', text: 'docs/superpowers/plans/p.md' })).toBeDefined()
   })
+
+  test('pane_groups_from_three_sources_shows_three_sections', async ($, on) => {
+    const base = seeded([[1, 'verified'], [2, 'open']]).plans[0]!
+    const group = (id: string, file: string, items: PlanItem[]) => ({ ...base, id, title: id, file, items })
+    await start($, on, {
+      nextId: 5,
+      plans: [
+        group('task', '', [{ id: 4, text: 'typed', status: 'open' }]),
+        group('doc', `${CWD}/docs/superpowers/plans/x.md`, base.items),
+        group('mode', '/Users/x/.claude/plans/y.md', [{ id: 3, text: 'approved', status: 'verified' }]),
+      ],
+    })
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    const sections = (await pane.findAll({ type: 'Box' })).map(s => s.key).filter(k => k?.startsWith('section:'))
+    expect(sections).toEqual(['section:docs', 'section:mode', 'section:tasks'])
+    expect((await pane.find({ key: 'section:docs' }))?.text).toContain('PLAN DOCS')
+    expect((await pane.find({ key: 'section:docs' }))?.text).toContain('1/2')
+    expect((await pane.find({ key: 'section:mode' }))?.text).toContain('1/1')
+    expect((await pane.find({ key: 'section:tasks' }))?.text).toContain('0/1')
+  })
+
+  test('pane_with_only_typed_tasks_shows_only_tasks_section', async ($, on) => {
+    const base = seeded([[1, 'open']])
+    await start($, on, { ...base, plans: base.plans.map(p => ({ ...p, file: '' })) })
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    expect(await pane.find({ key: 'section:tasks' })).toBeDefined()
+    expect(await pane.find({ key: 'section:docs' })).toBeUndefined()
+    expect(await pane.find({ key: 'section:mode' })).toBeUndefined()
+  })
 })

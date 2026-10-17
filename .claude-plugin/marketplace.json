@@ -12,9 +12,15 @@
     },
     {
       "name": "plan-tracker",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "source": "./plan-tracker",
       "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own."
+    },
+    {
+      "name": "git-tracker",
+      "version": "0.1.0",
+      "source": "./git-tracker",
+      "description": "Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists."
     }
   ]
 }
