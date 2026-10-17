@@ -1,7 +1,7 @@
 # Test cases — gingermarket
 
 screen: n/a
-run: `claude plugin test plan-tracker`
+run: `claude plugin test plan-tracker && claude plugin test git-tracker`
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
 |----|---------|------|--------------|-------|----------|-----------|--------|
@@ -53,6 +53,18 @@ run: `claude plugin test plan-tracker`
 | TC-046 | execution start, newest doc on disk | unit | empty store; fs.list of `docs/superpowers/plans` answers `old.md` (mtime 1), `new.md` (mtime 2), `notes.txt` (mtime 3) | 1. `$.tool.call Skill {skill:'superpowers:executing-plans'}` with no args and no plan doc written | fs.read called with `CWD/docs/superpowers/plans/new.md`; one group | plan-tracker/hooks/register.test.ts > execution skill falls back to the newest plan doc on disk | pass |
 | TC-047 | pane sections by source | unit | groups with file `''`, `<cwd>/docs/superpowers/plans/x.md`, `~/.claude/plans/y.md` | 1. mount Pane | Box keys `section:docs`, `section:mode`, `section:tasks` in that order; headers show `PLAN DOCS` and verified/total per section | plan-tracker/hooks/register.test.ts > pane_groups_from_three_sources_shows_three_sections | pass |
 | TC-048 | pane sections, typed tasks only | unit | one group with file `''` | 1. mount Pane | `section:tasks` present; no `section:docs`, no `section:mode` | plan-tracker/hooks/register.test.ts > pane_with_only_typed_tasks_shows_only_tasks_section | pass |
+| TC-049 | git-tracker parent branch | unit | HEAD `feat/x`; refs main, dev, origin/main, origin/feat/x; rev-list main `2 1`, dev `5 0`, origin/main `2 3`, origin/feat/x `0 0` | 1. `$.session.start` 2. mount Pane | header `feat/x ← main  2↑ 1↓`; own upstream origin/feat/x never picked; local main wins tie with origin/main | git-tracker/hooks/register.test.ts > parent_fewest_ahead_picks_main | pass |
+| TC-050 | git-tracker trunk | unit | HEAD `main` | 1. start 2. mount Pane | header `main`, no `←`; graph from `git log --graph --oneline --decorate -n 12` | git-tracker/hooks/register.test.ts > trunk_branch_shows_no_parent | pass |
+| TC-051 | git-tracker graph | unit | parent main; log stdout 14 lines | 1. start 2. mount Pane | first 12 lines drawn as Texts, in order | git-tracker/hooks/register.test.ts > graph_draws_git_log_lines_capped_12 | pass |
+| TC-052 | git-tracker changed files | unit | numstat `40\t12\thooks/register.tsx`, `-\t-\timg.png`; no summary lines | 1. start 2. mount Pane | `CHANGED 2 +40 −12`; rows `hooks/register.tsx +40 −12`, `img.png bin` | git-tracker/hooks/register.test.ts > changed_files_show_line_counts | pass |
+| TC-053 | git-tracker new files | unit | numstat `30\t0\tREADME.md` + summary ` create mode 100644 README.md`; untracked `notes.md`, no-index numstat `5\t0\tnotes.md` exit 1 | 1. start 2. mount Pane | `NEW 2 +35`: README.md +30, notes.md +5; neither under CHANGED | git-tracker/hooks/register.test.ts > new_files_include_tracked_and_untracked | pass |
+| TC-054 | git-tracker PR link | unit | gh stdout `{"number":12,"url":"https://github.com/o/r/pull/12","state":"OPEN","isDraft":false}` | 1. start 2. mount Pane | Text `PR #12 open`; Link href = that url | git-tracker/hooks/register.test.ts > pr_shows_number_state_and_link | pass |
+| TC-055 | git-tracker no PR / no gh | unit | (a) gh exit 1; (b) gh process.run rejects | 1. start 2. mount Pane | no PR row; branch and files still drawn | git-tracker/hooks/register.test.ts > missing_pr_or_gh_hides_pr_row | pass |
+| TC-056 | git-tracker not a repo | unit | rev-parse exit 128 | 1. start 2. mount Pane | only `Not a git repository.` | git-tracker/hooks/register.test.ts > not_a_repo_shows_message | pass |
+| TC-057 | git-tracker live refresh | unit | numstat empty at start, then `3\t0\ta.ts` | 1. start 2. `$.tool.call Edit` 3. mount Pane | row `a.ts +3`; gh run once (start only) | git-tracker/hooks/register.test.ts > edit_call_refreshes_files_without_gh | pass |
+| TC-058 | git-tracker PR mid-turn | unit | gh exit 1 at start, then PR 7 | 1. start 2. `$.tool.call Bash {command:'gh pr create --fill'}` 3. mount Pane | `PR #7 open` drawn before turn end | git-tracker/hooks/register.test.ts > bash_gh_pr_refreshes_pr | pass |
+| TC-059 | git-tracker command | unit | — | 1. start 2. run command `git-tracker` | ui.open with id `git-tracker`; reply `Git pane opened.` | git-tracker/hooks/register.test.ts > command_opens_git_pane | pass |
+| TC-060 | git-tracker colors | unit | numstat `40\t12\ta.ts`; gh PR 3 `MERGED` | 1. start 2. mount Pane | `+40` success, `−12` error, hash `3e1c2aa` warning, `HEAD` suggestion, branch suggestion, `merged` merged; texts unchanged | git-tracker/hooks/register.test.ts > colors_mark_counts_hash_refs_and_pr_state | pass |
 
 ## Rules
 
