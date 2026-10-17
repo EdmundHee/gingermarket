@@ -64,6 +64,7 @@ run: `claude plugin test plan-tracker && claude plugin test git-tracker`
 | TC-057 | git-tracker live refresh | unit | numstat empty at start, then `3\t0\ta.ts` | 1. start 2. `$.tool.call Edit` 3. mount Pane | row `a.ts +3`; gh run once (start only) | git-tracker/hooks/register.test.ts > edit_call_refreshes_files_without_gh | pass |
 | TC-058 | git-tracker PR mid-turn | unit | gh exit 1 at start, then PR 7 | 1. start 2. `$.tool.call Bash {command:'gh pr create --fill'}` 3. mount Pane | `PR #7 open` drawn before turn end | git-tracker/hooks/register.test.ts > bash_gh_pr_refreshes_pr | pass |
 | TC-059 | git-tracker command | unit | — | 1. start 2. run command `git-tracker` | ui.open with id `git-tracker`; reply `Git pane opened.` | git-tracker/hooks/register.test.ts > command_opens_git_pane | pass |
+| TC-060 | git-tracker colors | unit | numstat `40\t12\ta.ts`; gh PR 3 `MERGED` | 1. start 2. mount Pane | `+40` success, `−12` error, hash `3e1c2aa` warning, `HEAD` suggestion, branch suggestion, `merged` merged; texts unchanged | git-tracker/hooks/register.test.ts > colors_mark_counts_hash_refs_and_pr_state | pass |
 
 ## Rules
 

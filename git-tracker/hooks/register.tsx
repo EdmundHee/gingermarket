@@ -123,8 +123,13 @@ function refresh($: EngineInterface, withPr: boolean): Promise<void> {
   return running
 }
 
-const stat = (f: { added: number; removed: number; isBinary?: boolean }) =>
-  f.isBinary ? 'bin' : [f.added || !f.removed ? `+${f.added}` : '', f.removed ? `−${f.removed}` : ''].filter(Boolean).join(' ')
+/** Theme keys, so colors follow the person's theme; lanes cycle like `git log --graph`'s own colors. */
+const LANES = ['suggestion', 'success', 'warning', 'merged', 'claude', 'error'] as const
+const PR_COLOR: Record<string, string> = { open: 'success', draft: 'inactive', merged: 'merged', closed: 'error' }
+/** `<graph chars><hash>[ (<refs>)]<subject>`; a line of graph chars alone does not match. */
+const GRAPH_LINE = /^([*|\\/_. o-]*?)([0-9a-f]{7,40})( \([^)]*\))?(.*)$/
+// ponytail: a ref is remote when it starts with origin/ or upstream/; read the remote list if others matter
+const REMOTE = /^(origin|upstream)\//
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -162,45 +167,97 @@ export const register: Register = on => {
       )
     }
 
-    const section = (id: string, label: string, files: FileChange[]) =>
+    // `+40 −12`, `+3`, `bin`: one Text, its parts colored
+    const stat = (f: { added: number; removed: number; isBinary?: boolean }) =>
+      f.isBinary ? (
+        <Text dimColor>bin</Text>
+      ) : (
+        <Text>
+          {(f.added > 0 || f.removed === 0) && <Text color="success">{`+${f.added}`}</Text>}
+          {f.added > 0 && f.removed > 0 && ' '}
+          {f.removed > 0 && <Text color="error">{`−${f.removed}`}</Text>}
+        </Text>
+      )
+
+    const refName = (ref: string) =>
+      ref.startsWith('tag: ') ? <Text color="warning">{ref}</Text>
+      : ref.startsWith('HEAD -> ') ? <Text><Text color="suggestion" bold>HEAD</Text><Text dimColor>{' -> '}</Text><Text color="success">{ref.slice(8)}</Text></Text>
+      : ref === 'HEAD' ? <Text color="suggestion" bold>HEAD</Text>
+      : <Text color={REMOTE.test(ref) ? 'claude' : 'success'}>{ref}</Text>
+
+    // git's graph, each lane its own color, the hash yellow, refs by kind; the line's text is unchanged
+    const graphLine = (line: string) => {
+      const [, lanes = line, hash, refs, subject] = GRAPH_LINE.exec(line) ?? []
+      return (
+        <Text wrap="truncate">
+          {[...lanes].map((ch, i) => (
+            <Text color={LANES[Math.floor(i / 2) % LANES.length]} bold={ch === '*'} dimColor={ch === 'o'}>{ch}</Text>
+          ))}
+          {hash !== undefined && <Text color="warning">{hash}</Text>}
+          {refs !== undefined && (
+            <Text>
+              {' ('}
+              {refs.slice(2, -1).split(', ').map((ref, i) => <Text>{i > 0 && ', '}{refName(ref)}</Text>)}
+              {')'}
+            </Text>
+          )}
+          {subject !== undefined && <Text>{subject}</Text>}
+        </Text>
+      )
+    }
+
+    const section = (id: string, label: string, color: string, files: FileChange[]) =>
       files.length > 0 && (
         <Box flexDirection="column">
           <Box key={`section:${id}`} flexDirection="row" gap={1}>
             <Box flexGrow={1}>
-              <Text bold>{`${label} ${files.length}`}</Text>
+              <Text bold color={color}>{`${label} ${files.length}`}</Text>
             </Box>
-            <Text dimColor>{stat({ added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0) })}</Text>
+            {stat({ added: files.reduce((n, f) => n + f.added, 0), removed: files.reduce((n, f) => n + f.removed, 0) })}
           </Box>
           {files.map(f => (
             <Box key={`file:${f.path}`} flexDirection="row" gap={1} marginLeft={2}>
               <Box flexGrow={1}>
                 <Text wrap="truncate-start">{f.path}</Text>
               </Box>
-              <Text dimColor>{stat(f)}</Text>
+              {stat(f)}
             </Box>
           ))}
         </Box>
       )
 
+    const prState = v.pr === undefined ? '' : v.pr.isDraft ? 'draft' : v.pr.state.toLowerCase()
+
     return (
       <Box flexDirection="column" gap={1}>
         <Box key="head" flexDirection="row" gap={1}>
           <Box flexGrow={1}>
-            <Text bold wrap="truncate">{v.parent === undefined ? v.branch : `${v.branch} ← ${v.parent}  ${v.ahead}↑ ${v.behind}↓`}</Text>
+            <Text bold wrap="truncate">
+              <Text color="suggestion">{v.branch}</Text>
+              {v.parent !== undefined && (
+                <Text>
+                  <Text dimColor>{' ← '}</Text>
+                  <Text color="merged">{v.parent}</Text>
+                  {'  '}
+                  <Text color="success" dimColor={v.ahead === 0}>{`${v.ahead}↑`}</Text>
+                  {' '}
+                  <Text color="warning" dimColor={v.behind === 0}>{`${v.behind}↓`}</Text>
+                </Text>
+              )}
+            </Text>
           </Box>
           <Button key="refresh" plain onPress={() => refresh($, true)}>↻</Button>
         </Box>
-        <Box flexDirection="column">
-          {v.graph.map(line => (
-            <Text dimColor wrap="truncate">{line}</Text>
-          ))}
-        </Box>
+        <Box flexDirection="column">{v.graph.map(graphLine)}</Box>
         {v.files.length === 0 && <Text dimColor>{`No changes since ${v.parent ?? 'HEAD'}.`}</Text>}
-        {section('changed', 'CHANGED', v.files.filter(f => !f.isNew))}
-        {section('new', 'NEW', v.files.filter(f => f.isNew))}
+        {section('changed', 'CHANGED', 'warning', v.files.filter(f => !f.isNew))}
+        {section('new', 'NEW', 'success', v.files.filter(f => f.isNew))}
         {v.pr !== undefined && (
           <Box key="pr" flexDirection="column">
-            <Text bold>{`PR #${v.pr.number} ${v.pr.isDraft ? 'draft' : v.pr.state.toLowerCase()}`}</Text>
+            <Text bold>
+              {`PR #${v.pr.number} `}
+              <Text color={PR_COLOR[prState] ?? 'text'}>{prState}</Text>
+            </Text>
             <Link href={v.pr.url} />
           </Box>
         )}

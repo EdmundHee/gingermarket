@@ -195,6 +195,24 @@ describe('git-tracker', () => {
     expect(await pane.find({ type: 'Text', text: 'PR #7 open' })).toBeDefined()
   })
 
+  test('colors_mark_counts_hash_refs_and_pr_state', async ($, on) => {
+    await start($, on, {
+      ...repo(),
+      [NUMSTAT]: '40\t12\ta.ts\n',
+      [GH]: '{"number":3,"url":"https://github.com/o/r/pull/3","state":"MERGED","isDraft":false}\n',
+    })
+
+    const pane = await mount($)
+
+    const color = async (text: RegExp) => (await pane.find({ type: 'Text', text }))?.props.color
+    expect(await color(/^\+40$/)).toBe('success')
+    expect(await color(/^−12$/)).toBe('error')
+    expect(await color(/^3e1c2aa$/)).toBe('warning')
+    expect(await color(/^HEAD$/)).toBe('suggestion')
+    expect(await color(/^feat\/x$/)).toBe('suggestion') // the header's branch, drawn before the graph's ref
+    expect(await color(/^merged$/)).toBe('merged')
+  })
+
   test('command_opens_git_pane', async ($, on) => {
     const seen = await start($, on, repo())
 
