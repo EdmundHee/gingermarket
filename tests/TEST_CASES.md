@@ -1,7 +1,7 @@
 # Test cases — gingermarket
 
 screen: n/a
-run: `claude plugin test plan-tracker && claude plugin test git-tracker && claude plugin test design-tracker`
+run: `claude plugin test plan-tracker && claude plugin test git-tracker`
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
 |----|---------|------|--------------|-------|----------|-----------|--------|
@@ -73,15 +73,3 @@ run: `claude plugin test plan-tracker && claude plugin test git-tracker && claud
 - `Code test` is the test name under `claude plugin test <plugin>` so it can be found alone.
 - `Status` is the result of the last real run: `pass`, `fail`, `todo`. Never `pass` without the run output.
 - A failing row is fixed in the code, not in this table. See `Claude/rules/dev-workflow.md` section 4.
-| TC-061 | design-tracker not linked | unit | no `.claude/design-tracker.json` | 1. `$.session.start` 2. mount Pane | text `Not linked` and `/design-tracker <canvas url>`; no Artifact call | design-tracker/hooks/register.test.ts > unlinked_project_shows_link_hint | pass |
-| TC-062 | design-tracker link command | unit | no config; Artifact answers CANVAS | 1. `/design-tracker https://claude.ai/artifact/abc` | fs.write `/repo/.claude/design-tracker.json` with `canvas` that URL, `boards` `{}`; Artifact read with that url + `project/canvas.json` | design-tracker/hooks/register.test.ts > link_command_writes_config_and_reads_canvas | pass |
-| TC-063 | design-tracker link bad url | unit | no config | 1. `/design-tracker foo` | reply names `https://claude.ai/artifact/`; no fs.write | design-tracker/hooks/register.test.ts > link_command_bad_url_writes_nothing | pass |
-| TC-064 | design-tracker pane rows and states | unit | CANVAS (pages f07 "F07 Conversation", dat "DAT"; boards a "A home" f07, b "B picker" no page, c "C file [Draft]" dat, d "D old (retired 2026-10-02)" dat, e "E sheet" dat; library Syphonr); config a done `x.vue` (exists), e started | 1. start 2. mount Pane | `lib Syphonr`, `✓1 ◐1 ○2`; `F07 Conversation` rows `○ B picker ▶` then `✓ A home` (dim); `DAT` rows `◐ E sheet` then `○ C file` + `draft`, no ▶, no `[Draft]`; `D old` nowhere | design-tracker/hooks/register.test.ts > pane_lists_boards_by_page_and_state | pass |
-| TC-065 | design-tracker done file gone | unit | as TC-064, `x.vue` missing | 1. start 2. mount Pane | `A home` row shows ◐ | design-tracker/hooks/register.test.ts > done_board_with_missing_files_shows_started | pass |
-| TC-066 | design-tracker mark_board | unit | as TC-064 | 1. mark_board `{board: b, status: started}` 2. `{board: b, status: done, files: [y.vue]}` 3. `{board: e, status: none}` | config `b` done `[y.vue]`, no `e`; each result a string naming the board; header `✓2 ◐0 ○2` | design-tracker/hooks/register.test.ts > mark_board_writes_each_status | pass |
-| TC-067 | design-tracker mark_board refused | unit | as TC-064 | 1. `{board: zz, status: done, files: [y.vue]}` 2. `{board: d, status: done, files: [y.vue]}` 3. `{board: b, status: done}` | 3 string results naming why; no fs.write | design-tracker/hooks/register.test.ts > mark_board_refuses_unknown_retired_or_fileless | pass |
-| TC-068 | design-tracker ▶ and audit | unit | as TC-064, pane mounted | 1. press `build:b` 2. press `audit` | 2 submits: first has `B picker`, `project/b`, canvas url, `mark_board`; second has canvas url, `mark_board`, `Change no code`; no `build:c` (draft), no `build:a` (done) | design-tracker/hooks/register.test.ts > build_and_audit_buttons_submit_prompts | pass |
-| TC-069 | design-tracker auto in progress | unit | as TC-064 | 1. `$.turn.start` text = ▶ prompt for b 2. `$.tool.call Edit` /repo/src/b.vue 3. typed turn, Edit /repo/src/z.vue | after 2 config `b` started; after 3 nothing new | design-tracker/hooks/register.test.ts > build_turn_edit_marks_started | pass |
-| TC-070 | design-tracker canvas unreadable | unit | config linked; Artifact answers `isError` | 1. start 2. mount Pane | pane `Canvas unreadable`; no fs.write | design-tracker/hooks/register.test.ts > unreadable_canvas_shows_error | pass |
-| TC-071 | design-tracker prompt section, tool in front | unit | as TC-064 | 1. `$.prompt.compose()` 2. `$.tool.describe mark_board` `isDeferred: true` | section `design-tracker` has canvas url, library url, `✓1 ◐1 ○2`, `mark_board`; describe `isDeferred false` | design-tracker/hooks/register.test.ts > compose_lists_link_and_tool_not_deferred | pass |
-| TC-072 | design-tracker ↻ refresh | unit | as TC-064, pane mounted; Artifact then answers b "B picker v2", new f "F new" (f07), c without `[Draft]` | 1. press `refresh` | 2 Artifact reads; rows `○ B picker v2 ▶`, `○ F new ▶`, `○ C file ▶` (no `draft`); no model call | design-tracker/hooks/register.test.ts > refresh_button_rereads_canvas | pass |

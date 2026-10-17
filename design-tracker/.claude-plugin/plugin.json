@@ -1,7 +1,0 @@
-{
-  "name": "design-tracker",
-  "version": "0.1.0",
-  "description": "Design pane beside plan-tracker and git-tracker: the Claude Design canvas and library this project is tied to, each artboard by page with its draft/approved tag and build state (not started, in progress, done).",
-  "author": { "name": "Edmund Hee" },
-  "types": "./types/index.d.ts"
-}
