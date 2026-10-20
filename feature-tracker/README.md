@@ -12,20 +12,23 @@ modules and the features inside each one. It also runs an opus review per module
   under **Ideas**.
 
 ```
-Features · syph (vault)                 Scan
+Features · syph (vault)             [ Scan ]
 ▾ Auth
   3✓ 1◐ 1○ 0✗ · 2 open · 1 idea · stale · 3 files
-  Review  Note
+  [ Review ] [ Note ]
     ✓ Email login
     ◐ Password reset
-  ▸ Fixes 2  all
-  ▾ Ideas 1  all
-     ◉ low  Cache the session lookup  ▶
-  Plan 1 selected
+  ▸ Fixes 2  [ all ]
+  ▾ Ideas 1  [ all ]
+     ◉  low  Cache the session lookup  [ ▶ ]
+  [ Plan 1 selected ]
 ▸ Billing
   2✓ 0◐ 0○ 1✗ · never reviewed
-  Review
+  [ Review ]
 ```
+
+Actions are framed (`[ … ]`); module, group and finding rows are plain. Severity shows as a filled chip:
+`high` red, `med` yellow, `low` blue. Status counts take their glyph's colour, and `stale` is yellow.
 
 ## Install
 

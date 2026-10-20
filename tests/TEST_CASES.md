@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-20 · e8f73f8+dirty · validate ✔ · feature-tracker 37/37 · plan-tracker 53/53 · git-tracker 16/16
+last run: 2026-10-20 · 8e0deee+dirty · validate ✔ · feature-tracker 39/39 · plan-tracker 53/53 · git-tracker 16/16
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -113,6 +113,8 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-128 | feature-tracker pick and plan selected | unit | as TC-126 | 1. mount, press `toggle:Auth`, `group:Auth:fixes`, `group:Auth:ideas` 2. press `item:Auth:ideas:0` 3. press `plan:Auth` | after 2: `plan:Auth` = `Plan 1 selected`, item holds `◉`; after 3: one prompt with note path, `Auth`, `plan mode`, `- low · a/y.ts — cache list → memo`, not `no rate limit`; no `plan:Auth` | feature-tracker/hooks/register.test.ts > plan_selected_sends_only_picked_lines | pass |
 | TC-129 | feature-tracker all toggles group | unit | as TC-126 | 1. press `toggle:Auth`, `group:Auth:fixes` 2. press `all:Auth:fixes` 3. press it again | after 2: `plan:Auth` = `Plan 1 selected`; after 3: no `plan:Auth` | feature-tracker/hooks/register.test.ts > all_selects_then_clears_group | pass |
 | TC-130 | feature-tracker ▶ plans one item | unit | as TC-126 | 1. press `toggle:Auth`, `group:Auth:ideas` 2. press `go:Auth:ideas:0` | one prompt with `plan this finding`, note path, `- low · a/y.ts — cache list → memo`; no `plan:Auth` | feature-tracker/hooks/register.test.ts > play_plans_single_item | pass |
+| TC-131 | feature-tracker actions framed, rows plain | unit | as TC-126 | 1. mount, press `toggle:Auth`, `group:Auth:fixes` 2. press `item:Auth:fixes:0` | `scan`, `review:Auth`, `note:Auth`, `all:Auth:fixes`, `go:Auth:fixes:0` are Buttons without `plain`; `plan:Auth` has `variant` `primary`; `toggle:Auth`, `group:Auth:fixes`, `item:Auth:fixes:0` keep `plain` | feature-tracker/hooks/register.test.ts > action_buttons_framed_rows_plain | pass |
+| TC-132 | feature-tracker severity chip coloured | unit | as TC-126 | 1. mount, press `toggle:Auth`, `group:Auth:fixes` 2. press `group:Auth:ideas` | `item:Auth:fixes:0` first styled child: `backgroundColor` `error`, `color` `inverseText`; `item:Auth:ideas:0` first styled child: `backgroundColor` `suggestion`; item text still holds `high` | feature-tracker/hooks/register.test.ts > sev_chip_coloured_by_level | pass |
 
 ## Rules
 
