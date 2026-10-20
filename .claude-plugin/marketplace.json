@@ -25,7 +25,7 @@
     {
       "name": "feature-tracker",
       "source": "./feature-tracker",
-      "description": "Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security) logged as checkbox notes in Obsidian or docs/features/, and a Plan fixes button."
+      "description": "Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security, improvements) logged as checkbox notes in Obsidian or docs/features/, with each finding listed in the pane to pick and plan."
     }
   ]
 }

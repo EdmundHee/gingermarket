@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Feature, Latest, Module, Status, View } from '../types'
+import type { Feature, Item, Latest, Module, Status, View } from '../types'
 
 const PANE = 'feature-tracker'
 const TITLE = 'Features'
@@ -12,21 +12,24 @@ const GRAPH_CHARS = 6000 // graphify's report, cut, as scan orientation
 const STATUSES: readonly Status[] = ['done', 'partial', 'planned', 'broken']
 const GLYPH: Record<Status, string> = { done: '✓', partial: '◐', planned: '○', broken: '✗' }
 const COLOR: Record<Status, string> = { done: 'success', partial: 'warning', planned: 'inactive', broken: 'error' }
+const GROUPS = [['fixes', 'Fixes'], ['ideas', 'Ideas']] as const
 const BUCKETS = [
   ['missing', 'Missing feature'],
   ['debt', 'Tech debt'],
   ['handling', 'Missing handling'],
   ['tests', 'Test gap'],
   ['security', 'Security'],
+  ['improve', 'Improvement'],
 ] as const
+const IDEAS = 'Improvement' // not a defect: its own group in the pane
 type Bucket = (typeof BUCKETS)[number][0]
 const SEVS = ['high', 'med', 'low'] as const
 type Finding = { bucket: Bucket; sev: (typeof SEVS)[number]; file: string; line?: number; title: string; why: string; fix: string }
 /** A finding line of a review note, as `note()` writes it: `- [ ] high · a/x.ts:42 — title → fix`. */
-const FINDING = /^- \[([ xX])\] (?:high|med|low) · (.+?) — (.+?) → /
+const FINDING = /^- \[([ xX])\] (high|med|low) · (.+?) — (.+?) → /
 const FEATURE = /^- \[(planned|partial|done|broken)\] (.+?)(?: — (.*))?$/
 const NEW = / \(new\)$/
-const EMPTY: View = { project: '', mode: 'repo', root: '', hasInventory: false, modules: [], latest: {}, busy: {}, expanded: [] }
+const EMPTY: View = { project: '', mode: 'repo', root: '', hasInventory: false, modules: [], latest: {}, busy: {}, expanded: [], picked: [] }
 const view = atom({ plugin: 'feature-tracker', key: 'view' } as const, EMPTY)
 
 const READER_SYS =
@@ -219,7 +222,7 @@ function asModules(v: unknown): Module[] | undefined {
 
 // ---- review notes ----
 
-type Prior = { bucket: string; file: string; title: string; isTicked: boolean }
+type Prior = { bucket: string; sev: string; file: string; title: string; line: string; isTicked: boolean }
 
 function findings(note: string): Prior[] {
   let bucket = ''
@@ -230,7 +233,7 @@ function findings(note: string): Prior[] {
       return []
     }
     const f = FINDING.exec(line)
-    return f ? [{ bucket, isTicked: f[1] !== ' ', file: f[2] ?? '', title: f[3] ?? '' }] : []
+    return f ? [{ bucket, isTicked: f[1] !== ' ', sev: f[2] ?? '', file: f[3] ?? '', title: f[4] ?? '', line: line.slice(6) }] : []
   })
 }
 
@@ -294,8 +297,10 @@ async function load($: EngineInterface) {
     if (top === undefined) return
     const text = await $.fs.read(top.path).then(String).catch(() => '')
     const sha = /^sha: (\S+)$/m.exec(text)?.[1] ?? 'nogit'
-    const open = findings(text).filter(f => !f.isTicked).length
-    latest[m.name] = { file: top.path, sha, open, stale: await staleOf($, sha, m.paths) }
+    const items: Item[] = findings(text)
+      .filter(f => !f.isTicked)
+      .map(f => ({ group: f.bucket === IDEAS ? ('ideas' as const) : ('fixes' as const), line: f.line, sev: f.sev, title: f.title }))
+    latest[m.name] = { file: top.path, sha, items, stale: await staleOf($, sha, m.paths) }
   }))
   await update($, view, v => ({
     ...v, project: ctx.project, mode: ctx.mode, root: ctx.root, hint: ctx.hint, hasInventory: text !== undefined, modules, latest,
@@ -427,21 +432,33 @@ async function review($: EngineInterface, m: Module) {
     'Report findings in these buckets only: missing (a feature the module plainly needs but lacks), debt (tech debt: ' +
       'duplication, dead code, wrong abstractions, fragile code), handling (missing error handling, edge cases, ' +
       'validation, loading or empty states, retries), tests (behaviour no test covers), security (authz, injection, ' +
-      'secrets, unsafe input).',
+      'secrets, unsafe input), improve (a change that makes working code better for its users or maintainers: UX, ' +
+      'performance, clearer API, simpler flow; not a defect, not a missing feature).',
     `DO NOT REPEAT: the developer resolved or rejected these.\n${ticked.map(item).join('\n') || '(none)'}`,
     `STILL OPEN from the last review: re-list any that remain, and put the title of each one now fixed in "fixed".\n${open.map(item).join('\n') || '(none)'}`,
     'Read the code (Glob, Grep, Read) before answering; cite real files and lines. Reply with ONLY JSON:',
-    '{"findings":[{"bucket":"missing|debt|handling|tests|security","sev":"high|med|low","file":"<repo-relative path>",' +
+    '{"findings":[{"bucket":"missing|debt|handling|tests|security|improve","sev":"high|med|low","file":"<repo-relative path>",' +
       '"line":<number, or leave out>,"title":"<= 80 chars","why":"<= 200 chars","fix":"<= 120 chars"}],"fixed":["<title>"]}',
   ].join('\n\n')
   return ask($, { kind: 'review', key: m.name, description: `feature-tracker review: ${m.name}`, module: m, sha }, prompt)
 }
 
-async function planFixes($: EngineInterface, module: string, file: string) {
+async function planItems($: EngineInterface, module: string, file: string, items: Item[]) {
+  const one = items.length === 1
   await $.prompt.submit({
-    text: `Enter plan mode and plan fixes for the open findings (unticked boxes) in ${file}, the feature-tracker review of module ${module}. Skip any you judge not worth fixing and say why.`,
+    text: [
+      `Enter plan mode and plan ${one ? 'this finding' : 'these findings'} from ${file}, the feature-tracker review of module ${module}:`,
+      ...items.map(it => `- ${it.line}`),
+      ...(one ? [] : ['Skip any you judge not worth doing and say why.']),
+    ].join('\n'),
   })
-  toast($, `sent Plan fixes for ${module}`)
+  toast($, `sent ${items.length} finding${one ? '' : 's'} for ${module}`)
+}
+
+// ponytail: macOS `open`, then Linux `xdg-open`; anything else gets the path in a toast
+async function openNote($: EngineInterface, file: string) {
+  if ((await run($, ['open', file])).ok || (await run($, ['xdg-open', file])).ok) return
+  toast($, `could not open ${file}`)
 }
 
 export const register: Register = (on, options) => {
@@ -521,12 +538,24 @@ export const register: Register = (on, options) => {
 
     const toggle = (name: string) =>
       update($, view, s => ({ ...s, expanded: s.expanded.includes(name) ? s.expanded.filter(x => x !== name) : [...s.expanded, name] }))
+    const pick = (keys: string[], isOn: boolean) =>
+      update($, view, s => ({ ...s, picked: [...s.picked.filter(k => !keys.includes(k)), ...(isOn ? keys : [])] }))
 
     const moduleBox = (m: Module) => {
       const isOpen = v.expanded.includes(m.name)
       const last = v.latest[m.name]
+      const items = last?.items ?? []
+      const open = items.filter(it => it.group === 'fixes').length
+      const ideas = items.length - open
+      const keyOf = (it: Item) => `${last?.file}\t${it.line}`
+      const chosen = items.filter(it => v.picked.includes(keyOf(it)))
       const counts = STATUSES.map(s => `${m.features.filter(f => f.status === s).length}${GLYPH[s]}`).join(' ')
-      const meta = [counts, last === undefined ? 'never reviewed' : `${last.open} open`, ...(last?.stale ? [`stale · ${last.stale} files`] : [])].join(' · ')
+      const meta = [
+        counts,
+        last === undefined ? 'never reviewed' : `${open} open`,
+        ...(ideas ? [`${ideas} idea${ideas === 1 ? '' : 's'}`] : []),
+        ...(last?.stale ? [`stale · ${last.stale} files`] : []),
+      ].join(' · ')
       return (
         <Box flexDirection="column">
           <Box key={`module:${m.name}`} flexDirection="row">
@@ -537,8 +566,8 @@ export const register: Register = (on, options) => {
           </Box>
           <Box flexDirection="row" gap={1} marginLeft={2}>
             <Button key={`review:${m.name}`} plain onPress={() => review($, m)}>{v.busy[m.name] === undefined ? 'Review' : 'reviewing…'}</Button>
-            {last !== undefined && last.open > 0 && (
-              <Button key={`fix:${m.name}`} plain onPress={() => planFixes($, m.name, last.file)}>Plan fixes</Button>
+            {last !== undefined && (
+              <Button key={`note:${m.name}`} plain onPress={() => openNote($, last.file)}>Note</Button>
             )}
           </Box>
           {isOpen && m.features.map(f => (
@@ -547,6 +576,34 @@ export const register: Register = (on, options) => {
               <Text wrap="truncate">{f.name}</Text>
             </Box>
           ))}
+          {isOpen && GROUPS.filter(([g]) => items.some(it => it.group === g)).map(([g, label]) => {
+            const list = items.filter(it => it.group === g)
+            const isGroupOpen = v.expanded.includes(`${m.name}#${g}`)
+            return (
+              <Box key={`grp:${m.name}:${g}`} flexDirection="column" marginLeft={2}>
+                <Box flexDirection="row" gap={2}>
+                  <Button key={`group:${m.name}:${g}`} plain onPress={() => toggle(`${m.name}#${g}`)}>{`${isGroupOpen ? '▾' : '▸'} ${label} ${list.length}`}</Button>
+                  <Button key={`all:${m.name}:${g}`} plain onPress={() => pick(list.map(keyOf), !list.every(it => v.picked.includes(keyOf(it))))}>all</Button>
+                </Box>
+                {isGroupOpen && list.map((it, n) => (
+                  <Box key={`row:${m.name}:${g}:${n}`} flexDirection="row" gap={1} marginLeft={3}>
+                    <Box flexGrow={1} flexShrink={1}>
+                      <Button key={`item:${m.name}:${g}:${n}`} plain onPress={() => pick([keyOf(it)], !v.picked.includes(keyOf(it)))}>{`${v.picked.includes(keyOf(it)) ? '◉' : '○'} ${it.sev.padEnd(4)} ${it.title}`}</Button>
+                    </Box>
+                    <Button key={`go:${m.name}:${g}:${n}`} plain onPress={() => planItems($, m.name, last?.file ?? '', [it])}>▶</Button>
+                  </Box>
+                ))}
+              </Box>
+            )
+          })}
+          {last !== undefined && chosen.length > 0 && (
+            <Box key={`picked:${m.name}`} marginLeft={2}>
+              <Button key={`plan:${m.name}`} plain onPress={async () => {
+                await planItems($, m.name, last.file, chosen)
+                await pick(chosen.map(keyOf), false)
+              }}>{`Plan ${chosen.length} selected`}</Button>
+            </Box>
+          )}
         </Box>
       )
     }

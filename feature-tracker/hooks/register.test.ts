@@ -19,6 +19,7 @@ const PRIOR =
   '## Tech debt\n- [x] med · a/x.ts:3 — dup validation → share schema\n  why\n' +
   '## Missing handling\n- [ ] high · a/login.ts:42 — no rate limit → add limiter\n  why\n'
 const PRIOR_PATH = `${DOCS}/reviews/2026-10-12_auth-abc1234.md`
+const ITEMS_NOTE = `${PRIOR}## Improvement\n- [ ] low · a/y.ts — cache list → memo\n`
 const FINDINGS = JSON.stringify({
   findings: [
     { bucket: 'debt', sev: 'high', file: 'a/x.ts', line: 42, title: 't', why: 'w', fix: 'f' },
@@ -299,6 +300,37 @@ describe('feature-tracker', () => {
     expect(at('no rate limit')).toBeGreaterThan(at('STILL OPEN'))
   })
 
+  test('review_prompt_offers_improve_bucket', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+
+    const prompt = seen.spawns[0]?.prompt ?? ''
+    expect(prompt).toContain('improve (')
+    expect(prompt).toContain('missing|debt|handling|tests|security|improve')
+  })
+
+  test('review_note_lists_improvements_last', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+    const answer = JSON.stringify({
+      findings: [
+        { bucket: 'improve', sev: 'low', file: 'a/y.ts', title: 'cache list', why: '', fix: 'memo' },
+        { bucket: 'debt', sev: 'med', file: 'a/x.ts', title: 't', why: '', fix: 'f' },
+      ],
+      fixed: [],
+    })
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, answer)
+
+    const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
+    expect(note.indexOf('## Tech debt')).toBeGreaterThan(-1)
+    expect(note.indexOf('## Improvement')).toBeGreaterThan(note.indexOf('## Tech debt'))
+    expect(note).toContain('- [ ] low · a/y.ts — cache list → memo')
+  })
+
   test('review_lists_resolved_and_keeps_old_notes', async ($, on) => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: PRIOR } })
     const pane = await mount($)
@@ -387,26 +419,124 @@ describe('feature-tracker', () => {
     expect(await textOf(pane, 'meta:Auth')).toContain('2 open')
   })
 
-  test('plan_fixes_submits_prompt', async ($, on) => {
+
+
+  test('ideas_counted_apart_from_open', async ($, on) => {
+    const note = `${PRIOR}## Improvement\n- [ ] low · a/y.ts — cache list → memo\n- [ ] low · a/z.ts — merge steps → one call\n`
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: note } })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'meta:Auth')).toContain('1 open · 2 ideas')
+  })
+
+
+
+  test('note_button_opens_latest_note', async ($, on) => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: PRIOR } })
     const pane = await mount($)
 
-    await pane.press({ key: 'fix:Auth' })
+    await pane.press({ key: 'note:Auth' })
+
+    expect(seen.ran).toContain(`open ${PRIOR_PATH}`)
+  })
+
+  test('note_open_failure_toasts_path', async ($, on) => {
+    const answers = { [`open ${PRIOR_PATH}`]: { exit: 1 }, [`xdg-open ${PRIOR_PATH}`]: { exit: 1 } }
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: PRIOR }, answers })
+    const pane = await mount($)
+
+    await pane.press({ key: 'note:Auth' })
+
+    expect(seen.toasts.join('\n')).toContain(PRIOR_PATH)
+  })
+
+  test('groups_start_collapsed_with_counts', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'toggle:Auth' })
+
+    expect(await textOf(pane, 'group:Auth:fixes')).toBe('▸ Fixes 1')
+    expect(await textOf(pane, 'group:Auth:ideas')).toBe('▸ Ideas 1')
+    expect(await pane.find({ key: 'item:Auth:fixes:0' })).toBeUndefined()
+  })
+
+  test('group_lists_unticked_items', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    const row = await textOf(pane, 'item:Auth:fixes:0')
+    expect(row).toContain('○')
+    expect(row).toContain('high')
+    expect(row).toContain('no rate limit')
+    expect(await pane.find({ key: 'item:Auth:fixes:1' })).toBeUndefined()
+  })
+
+  test('plan_selected_sends_only_picked_lines', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+    await pane.press({ key: 'group:Auth:ideas' })
+
+    await pane.press({ key: 'item:Auth:ideas:0' })
+
+    expect(await textOf(pane, 'plan:Auth')).toBe('Plan 1 selected')
+    expect(await textOf(pane, 'item:Auth:ideas:0')).toContain('◉')
+
+    await pane.press({ key: 'plan:Auth' })
 
     expect(seen.submitted).toHaveLength(1)
     expect(seen.submitted[0]).toContain(PRIOR_PATH)
     expect(seen.submitted[0]).toContain('Auth')
     expect(seen.submitted[0]).toContain('plan mode')
+    expect(seen.submitted[0]).toContain('- low · a/y.ts — cache list → memo')
+    expect(seen.submitted[0]).not.toContain('no rate limit')
+    expect(await pane.find({ key: 'plan:Auth' })).toBeUndefined()
   })
 
-  test('plan_fixes_hidden_when_none_open', async ($, on) => {
-    const done = PRIOR.replace('- [ ] high', '- [x] high')
-    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: done } })
+  test('all_selects_then_clears_group', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'all:Auth:fixes' })
+
+    expect(await textOf(pane, 'plan:Auth')).toBe('Plan 1 selected')
+
+    await pane.press({ key: 'all:Auth:fixes' })
+
+    expect(await pane.find({ key: 'plan:Auth' })).toBeUndefined()
+  })
+
+  test('play_plans_single_item', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:ideas' })
+
+    await pane.press({ key: 'go:Auth:ideas:0' })
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toContain('plan this finding')
+    expect(seen.submitted[0]).toContain(PRIOR_PATH)
+    expect(seen.submitted[0]).toContain('- low · a/y.ts — cache list → memo')
+    expect(await pane.find({ key: 'plan:Auth' })).toBeUndefined()
+  })
+
+  test('note_hidden_until_reviewed', async ($, on) => {
+    const inv = `${INV}\n## Billing\npaths: b/**\n- [done] Checkout — stripe\n`
+    await start($, on, { files: { [`${DOCS}/features.md`]: inv, [PRIOR_PATH]: PRIOR } })
 
     const pane = await mount($)
 
-    expect(await textOf(pane, 'meta:Auth')).toContain('0 open')
-    expect(await pane.find({ key: 'fix:Auth' })).toBeUndefined()
+    expect(await pane.find({ key: 'note:Auth' })).toBeDefined()
+    expect(await pane.find({ key: 'note:Billing' })).toBeUndefined()
   })
 
   test('busy_module_blocks_second_review', async ($, on) => {

@@ -8,14 +8,20 @@ modules and the features inside each one. It also runs an opus review per module
 - **Missing handling**: error handling, edge cases, validation, loading/empty states, retries
 - **Test gap**: behaviour no test covers
 - **Security**: authz, injection, secrets, unsafe input
+- **Improvement**: UX, performance, clearer API, simpler flow; not a defect. The pane lists these apart,
+  under **Ideas**.
 
 ```
 Features · syph (vault)                 Scan
 ▾ Auth
-  3✓ 1◐ 1○ 0✗ · 2 open · stale · 3 files
-  Review  Plan fixes
+  3✓ 1◐ 1○ 0✗ · 2 open · 1 idea · stale · 3 files
+  Review  Note
     ✓ Email login
     ◐ Password reset
+  ▸ Fixes 2  all
+  ▾ Ideas 1  all
+     ◉ low  Cache the session lookup  ▶
+  Plan 1 selected
 ▸ Billing
   2✓ 0◐ 0○ 1✗ · never reviewed
   Review
@@ -51,8 +57,11 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
 3. **Tick a box** in the note when a finding is fixed or not worth fixing. The next review of that
    module reads the last 5 notes. Ticked findings are not repeated, and open ones it finds fixed are
    listed under `## Resolved since last review`. Old notes are never rewritten, so the history stays.
-4. **Plan fixes** sends Claude a prompt to plan fixes for the open findings in plan mode. With
-   plan-tracker installed, the approved plan's items are tracked as usual.
+4. **Expand** a module (▸) to see `Fixes N` and `Ideas N`. Open a group to list its unticked findings.
+   Click findings to select them, or `all` for the whole group, then **Plan N selected**. **▶** plans
+   one finding right away. Either way Claude gets a plan-mode prompt that quotes the chosen note
+   lines. With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
+   the newest review note (`open`, else `xdg-open`, else a toast with its path).
 
 A module shows `stale · N files` once files under its paths have changed since the commit it was last
 reviewed at (`git diff --name-only <sha> -- ':(glob)<path>'`; no model call). A review never edits
