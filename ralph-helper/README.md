@@ -15,9 +15,12 @@ You create a plan in Claude Code. ralph-helper reads it, breaks it into phases, 
 
 ## Installation
 
-```bash
-claude plugin add /path/to/ralph-helper
 ```
+/plugin install ralph-helper --marketplace EdmundHee/gingermarket
+```
+
+Working from a clone instead: `claude plugin marketplace add <clone folder>`, then
+`claude plugin install ralph-helper@gingermarket`.
 
 ## How to Use
 

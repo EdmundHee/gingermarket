@@ -1,7 +1,8 @@
 {
   "name": "plan-tracker",
   "version": "0.4.1",
-  "description": "Tracks approved plan items in a pane: Claude marks, opus verifies, click an item to send Claude to work on it.",
+  "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own.",
   "author": { "name": "Edmund Hee" },
+  "license": "MIT",
   "types": "./types/index.d.ts"
 }

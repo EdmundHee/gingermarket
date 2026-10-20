@@ -5,3 +5,4 @@ docs/
 # engine-laid type declarations beside a mod
 plan-tracker/.claude-plugin/types/
 git-tracker/.claude-plugin/types/
+feature-tracker/.claude-plugin/types/
