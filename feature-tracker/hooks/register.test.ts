@@ -120,6 +120,7 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     return { text: e.text }
   })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
+  on('classic.SessionStart', () => ({}))
   await $.session.start({ cwd: R, surface: 'terminal', isInteractive: true })
   return seen
 }
@@ -656,5 +657,28 @@ describe('feature-tracker', () => {
 
     expect(entered).toMatchObject({ text: expect.stringContaining('from="b1"') })
     expect(entered).not.toHaveProperty('drop')
+  })
+
+  test('clear_reloads_inventory', async ($, on) => {
+    const seen = await start($, on)
+    seen.fs.map.set(`${DOCS}/features.md`, INV)
+
+    await $.classic.SessionStart({ source: 'clear' })
+    const pane = await mount($)
+
+    expect(await pane.find({ key: 'module:Auth' })).toBeDefined()
+    expect(await pane.find({ type: 'Text', text: /No features\.md yet/ })).toBeUndefined()
+    expect(seen.opened).toEqual(['feature-tracker', 'feature-tracker'])
+  })
+
+  test('clear_frees_busy_review', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+    await pane.press({ key: 'review:Auth' })
+
+    await $.classic.SessionStart({ source: 'clear' })
+    await pane.press({ key: 'review:Auth' })
+
+    expect(seen.spawns.map(s => s.description)).toEqual(['feature-tracker review: Auth', 'feature-tracker review: Auth'])
   })
 })

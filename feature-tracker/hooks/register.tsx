@@ -308,6 +308,15 @@ async function load($: EngineInterface) {
   }))
 }
 
+/** A new session's pane: no reader waiting, `view` back to EMPTY, the inventory read again. */
+async function reset($: EngineInterface) {
+  busyNow.clear()
+  pending.clear()
+  readers.clear()
+  await update($, view, () => EMPTY)
+  await load($)
+}
+
 async function setBusy($: EngineInterface, key: string, label?: 'scanning' | 'reviewing') {
   if (label === undefined) busyNow.delete(key)
   else busyNow.add(key)
@@ -464,11 +473,7 @@ async function openNote($: EngineInterface, file: string) {
 
 export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
-    busyNow.clear()
-    pending.clear()
-    readers.clear()
     ctx = await resolve($, e.cwd, typeof options.notesDir === 'string' ? options.notesDir : '')
-    await update($, view, () => EMPTY)
     await $.command.register({
       name: PANE,
       description: 'Open the Features pane: modules → features, opus review per module',
@@ -483,12 +488,22 @@ export const register: Register = (on, options) => {
         model: 'opus',
       })
       .catch(err => $.ui.log(`feature-tracker: reader not registered: ${String(err)}`, { to: 'debug' }))
-    await load($)
+    await reset($)
     const out = await next(e)
     // Opened once the plugins beneath have started, so the Features tab sits after Plan and Git even when
     // this mod loads first (`--plugin-dir`). ponytail: Plan before Git still follows their load order
     void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
     return out
+  })
+
+  // /clear starts a new session id with no session.start, so `view` reads EMPTY until something reloads it
+  // ponytail: clear only; add 'resume' if an in-session /resume empties the pane too
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') {
+      await reset($)
+      void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+    }
+    return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
