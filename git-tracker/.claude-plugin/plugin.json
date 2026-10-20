@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "description": "Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists.",
   "author": { "name": "Edmund Hee" },
+  "license": "MIT",
   "types": "./types/index.d.ts"
 }

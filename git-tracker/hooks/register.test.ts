@@ -223,4 +223,38 @@ describe('git-tracker', () => {
     expect(seen.opened).toContain('git-tracker')
     expect(ran).toMatchObject({ text: 'Git pane opened.' })
   })
+
+  test('bash_git_push_refreshes_pr', async ($, on) => {
+    const answers = repo()
+    await start($, on, answers)
+    answers[GH] = '{"number":9,"url":"https://github.com/o/r/pull/9","state":"OPEN","isDraft":false}\n'
+
+    await $.tool.call({ tool: 'Bash', command: 'git push -u origin feat/x' })
+
+    const pane = await mount($)
+    expect(await pane.find({ type: 'Text', text: 'PR #9 open' })).toBeDefined()
+  })
+
+  test('refresh_button_reloads_files_and_pr', async ($, on) => {
+    const answers = repo()
+    const seen = await start($, on, answers)
+    const pane = await mount($)
+    answers[NUMSTAT] = '3\t0\ta.ts\n'
+
+    await pane.press({ key: 'refresh' })
+
+    expect((await pane.find({ key: 'file:a.ts' }))?.text).toContain('+3')
+    expect(seen.ran.filter(argv => argv === GH)).toHaveLength(2)
+  })
+
+  test('untracked_files_capped_at_30', async ($, on) => {
+    const names = Array.from({ length: 31 }, (_, i) => `f${String(i + 1).padStart(2, '0')}.md`)
+    await start($, on, { ...repo(), 'git ls-files --others --exclude-standard': `${names.join('\n')}\n` })
+
+    const pane = await mount($)
+
+    expect((await pane.find({ key: 'section:new' }))?.text).toContain('NEW 30')
+    expect(await pane.find({ key: 'file:f30.md' })).toBeDefined()
+    expect(await pane.find({ key: 'file:f31.md' })).toBeUndefined()
+  })
 })

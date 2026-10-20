@@ -81,6 +81,7 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
     store: fakeStore(on, tracker ? { [KEY]: tracker } : {}),
     submitted: [] as string[],
     toasts: [] as string[],
+    opened: [] as string[],
   }
   on('state.set', { plugin: 'plan-tracker', key: 'tracker' }, (_$, e, next) => {
     seen.state = e.value as Tracker
@@ -90,7 +91,10 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__plan-tracker__${e.name}` } }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.messages', () => ({ value: messages as never }))
-  on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  on('ui.open', (_$, e) => {
+    seen.opened.push(e.id)
+    return { value: { isPlaced: true as const } }
+  })
   on('ui.status', () => ({ value: undefined }))
   on('ui.toast', (_$, e) => {
     seen.toasts.push(e.text)
@@ -115,6 +119,17 @@ const endTurn = ($: Engine, over: { agentId?: string; reason?: 'answer' | 'abort
   $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1', ...over })
 
 const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
+
+/** Fakes the AskUserQuestion dialog behind `$.ui.ask`: the user picks `label`. */
+function asked(on: On, label: string) {
+  on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => ({
+    result: { questions: e.questions, answers: { [e.questions[0]?.question ?? '']: label } },
+  }))
+}
+
+/** Runs `/plan-tracker <args>` from the composer. */
+const command = ($: Engine, args = '') =>
+  $.command.run({ command: 'plan-tracker', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 } })
 
 /** A turn begins as the tracker's own work prompt (plan work) unless `text` says otherwise. */
 const startTurn = ($: Engine, text = 'Work on plan item #1: item 1') => $.turn.start({ text, turnId: 't2' })
@@ -760,5 +775,60 @@ describe('plan-tracker', () => {
     expect(await pane.find({ key: 'section:tasks' })).toBeDefined()
     expect(await pane.find({ key: 'section:docs' })).toBeUndefined()
     expect(await pane.find({ key: 'section:mode' })).toBeUndefined()
+  })
+
+  test('reset_confirmed_wipes_tracker', async ($, on) => {
+    asked(on, 'Wipe')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    const ran = await command($, 'reset')
+
+    expect(ran).toMatchObject({ text: 'Plan tracker wiped.' })
+    expect(seen.state?.plans).toEqual([])
+    expect(seen.store.get(KEY)).toEqual({ nextId: 1, plans: [] })
+  })
+
+  test('reset_declined_keeps_tracker', async ($, on) => {
+    asked(on, 'Keep')
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    const ran = await command($, 'reset')
+
+    expect(ran).toMatchObject({ text: 'Kept.' })
+    expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
+  })
+
+  test('remove_button_drops_group', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'remove:p1' })
+
+    expect(seen.state?.plans).toEqual([])
+    expect((seen.store.get(KEY) as Tracker).plans).toEqual([])
+  })
+
+  test('extract_again_fills_failed_group', async ($, on) => {
+    opus(on, () => '["a", "b"]')
+    on('fs.read', () => ({ value: PLAN }))
+    const seen = await start($, on, seeded([], 'extraction failed'))
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'extract-again' })
+
+    const group = seen.state?.plans[0]
+    expect(group?.items.map(i => [i.id, i.text, i.status])).toEqual([[1, 'a', 'open'], [2, 'b', 'open']])
+    expect(group?.note).toBeUndefined()
+    expect(seen.state?.nextId).toBe(3)
+  })
+
+  test('command_opens_plan_pane', async ($, on) => {
+    const seen = await start($, on)
+    seen.opened.length = 0 // session start opens the pane unasked
+
+    const ran = await command($)
+
+    expect(seen.opened).toEqual(['plan-tracker'])
+    expect(ran).toMatchObject({ text: 'Plan tracker pane opened.' })
   })
 })
