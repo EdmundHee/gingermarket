@@ -1,6 +1,6 @@
 {
   "name": "feature-tracker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security) logged as checkbox notes in Obsidian or docs/features/, and a Plan fixes button.",
   "author": { "name": "Edmund Hee" },
   "license": "MIT",

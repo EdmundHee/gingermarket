@@ -211,7 +211,7 @@ function asModules(v: unknown): Module[] | undefined {
     const features = (Array.isArray(m.features) ? m.features : []).flatMap((f: Record<string, unknown>) => {
       const fname = oneLine(f?.name)
       const status = STATUSES.find(s => s === f?.status) ?? 'planned'
-      return fname === '' ? [] : [{ name: fname, desc: oneLine(f.desc), status }]
+      return fname === '' ? [] : [{ name: fname, desc: '', status }]
     })
     return [{ name, paths, features }]
   })
@@ -401,10 +401,13 @@ async function scan($: EngineInterface) {
       'Give each module the git glob paths, relative to the repo root (like `server/auth/**`), that hold its code.',
     'A feature is one user-facing capability with a status: done (works end to end), partial (part of it exists), ' +
       'planned (referenced or stubbed, not built), broken (built but fails).',
+    'Name each feature so it explains itself with no description: what the user can do or get, in plain words, ' +
+      'at most 40 characters (the pane is 48 columns). Like "Retry failed item extraction", not "Extract again". ' +
+      'No file paths, command syntax or internal jargon.',
     ...(existing === undefined ? [] : ['The developer already keeps this inventory. Keep their module names; list what is there and what is missing:', existing]),
     ...(graph ? ["Graphify's report of the repo, for orientation:", graph.slice(0, GRAPH_CHARS)] : []),
     'Read the code (Glob, Grep, Read) before answering. Reply with ONLY JSON:',
-    '{"modules":[{"name":"…","paths":["…"],"features":[{"name":"…","desc":"<= 80 chars","status":"done|partial|planned|broken"}]}]}',
+    '{"modules":[{"name":"…","paths":["…"],"features":[{"name":"<= 40 chars","status":"done|partial|planned|broken"}]}]}',
   ].join('\n\n')
   return ask($, { kind: 'scan', key: 'scan', description: 'feature-tracker scan', path }, prompt)
 }
@@ -538,7 +541,7 @@ export const register: Register = (on, options) => {
           {isOpen && m.features.map(f => (
             <Box key={`feature:${m.name}/${f.name}`} flexDirection="row" gap={1} marginLeft={4}>
               <Text color={COLOR[f.status]}>{GLYPH[f.status]}</Text>
-              <Text wrap="truncate">{f.desc ? `${f.name} — ${f.desc}` : f.name}</Text>
+              <Text wrap="truncate">{f.name}</Text>
             </Box>
           ))}
         </Box>

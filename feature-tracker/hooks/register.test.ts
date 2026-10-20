@@ -186,6 +186,8 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'toggle:Auth' })
 
     expect(await textOf(pane, 'meta:Auth')).toContain('1✓ 1◐ 1○ 1✗')
+    expect(await textOf(pane, 'feature:Auth/Login')).toContain('Login')
+    expect(await textOf(pane, 'feature:Auth/Login')).not.toContain('email')
     expect(await pane.find({ key: 'feature:Auth/OAuth' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /some free note/ })).toBeUndefined()
     expect(await pane.find({ key: 'module:Billing' })).toBeDefined()
@@ -217,7 +219,7 @@ describe('feature-tracker', () => {
     const file = seen.fs.map.get(`${V}/syph/features.md`) ?? ''
     expect(file).toContain('type: doc')
     expect(file).toContain('Project: [[syph]]')
-    expect(file).toContain('## Auth\npaths: a/**\n- [done] Login — email\n')
+    expect(file).toContain('## Auth\npaths: a/**\n- [done] Login\n')
     expect(file).toContain('## Billing\npaths: b/**\n')
   })
 
@@ -236,7 +238,7 @@ describe('feature-tracker', () => {
     await finish($, answer)
 
     expect(seen.fs.map.get(`${DOCS}/features.md`)).toBe(
-      '## Auth\npaths: a/**\n- [done] Login — my words\nnote to self\n- [planned] Reset — mail (new)\n\n## Billing (new)\npaths: b/**\n',
+      '## Auth\npaths: a/**\n- [done] Login — my words\nnote to self\n- [planned] Reset (new)\n\n## Billing (new)\npaths: b/**\n',
     )
   })
 
@@ -430,6 +432,8 @@ describe('feature-tracker', () => {
     expect(seen.opened).toContain('feature-tracker')
     expect(seen.spawns).toHaveLength(2)
     expect(seen.spawns[0]?.description).toContain('scan')
+    expect(seen.spawns[0]?.prompt).toContain('at most 40 characters')
+    expect(seen.spawns[0]?.prompt).not.toContain('"desc"')
     expect(seen.spawns[1]?.prompt).toContain('a/**')
     expect(unknown).toMatchObject({ text: expect.stringContaining('Auth, Billing') })
   })

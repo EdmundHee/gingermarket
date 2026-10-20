@@ -14,8 +14,8 @@ Features · syph (vault)                 Scan
 ▾ Auth
   3✓ 1◐ 1○ 0✗ · 2 open · stale · 3 files
   Review  Plan fixes
-    ✓ Email login — Supabase email+pw
-    ◐ Password reset — no expiry email
+    ✓ Email login
+    ◐ Password reset
 ▸ Billing
   2✓ 0◐ 0○ 1✗ · never reviewed
   Review
@@ -37,10 +37,11 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    ```
    ## Auth
    paths: server/auth/**, client/src/login/**
-   - [done] Email login — Supabase email+pw
-   - [partial] Password reset — no expiry email
+   - [done] Email login
+   - [partial] Password reset
    ```
    A status is `planned`, `partial`, `done` or `broken`. `paths:` are git globs from the repo root.
+   Text after ` — ` on a feature line is your note: kept, hidden in the pane, given to the reviewer.
    Any other line is kept and ignored. A later Scan only **appends**: new features go at the end of
    their module with ` (new)`, new modules go at the end of the file. It never rewrites or removes a
    line of yours.
