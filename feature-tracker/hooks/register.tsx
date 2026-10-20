@@ -12,7 +12,8 @@ const GRAPH_CHARS = 6000 // graphify's report, cut, as scan orientation
 const STATUSES: readonly Status[] = ['done', 'partial', 'planned', 'broken']
 const GLYPH: Record<Status, string> = { done: '✓', partial: '◐', planned: '○', broken: '✗' }
 const COLOR: Record<Status, string> = { done: 'success', partial: 'warning', planned: 'inactive', broken: 'error' }
-const GROUPS = [['fixes', 'Fixes'], ['ideas', 'Ideas']] as const
+const SEV_COLOR: Record<string, string> = { high: 'error', med: 'warning', low: 'suggestion' }
+const GROUPS = [['fixes', 'Fixes', 'warning'], ['ideas', 'Ideas', 'merged']] as const
 const BUCKETS = [
   ['missing', 'Missing feature'],
   ['debt', 'Tech debt'],
@@ -549,25 +550,28 @@ export const register: Register = (on, options) => {
       const ideas = items.length - open
       const keyOf = (it: Item) => `${last?.file}\t${it.line}`
       const chosen = items.filter(it => v.picked.includes(keyOf(it)))
-      const counts = STATUSES.map(s => `${m.features.filter(f => f.status === s).length}${GLYPH[s]}`).join(' ')
       const meta = [
-        counts,
         last === undefined ? 'never reviewed' : `${open} open`,
         ...(ideas ? [`${ideas} idea${ideas === 1 ? '' : 's'}`] : []),
-        ...(last?.stale ? [`stale · ${last.stale} files`] : []),
       ].join(' · ')
       return (
         <Box flexDirection="column">
           <Box key={`module:${m.name}`} flexDirection="row">
-            <Button key={`toggle:${m.name}`} plain onPress={() => toggle(m.name)}>{`${isOpen ? '▾' : '▸'} ${m.name}`}</Button>
+            <Button key={`toggle:${m.name}`} plain onPress={() => toggle(m.name)}>{isOpen ? '▾ ' : '▸ '}<Text bold>{m.name}</Text></Button>
           </Box>
           <Box key={`meta:${m.name}`} marginLeft={2}>
-            <Text dimColor wrap="truncate">{meta}</Text>
+            <Text wrap="truncate">
+              {STATUSES.map((s, i) => <Text color={COLOR[s]}>{`${i ? ' ' : ''}${m.features.filter(f => f.status === s).length}${GLYPH[s]}`}</Text>)}
+              <Text dimColor>{` · ${meta}`}</Text>
+              {last?.stale ? <Text color="warning">{` · stale · ${last.stale} files`}</Text> : null}
+            </Text>
           </Box>
           <Box flexDirection="row" gap={1} marginLeft={2}>
-            <Button key={`review:${m.name}`} plain onPress={() => review($, m)}>{v.busy[m.name] === undefined ? 'Review' : 'reviewing…'}</Button>
+            <Button key={`review:${m.name}`} dimColor={v.busy[m.name] !== undefined} onPress={() => review($, m)}>
+              {v.busy[m.name] === undefined ? <Text color="suggestion">Review</Text> : 'reviewing…'}
+            </Button>
             {last !== undefined && (
-              <Button key={`note:${m.name}`} plain onPress={() => openNote($, last.file)}>Note</Button>
+              <Button key={`note:${m.name}`} dimColor onPress={() => openNote($, last.file)}>Note</Button>
             )}
           </Box>
           {isOpen && m.features.map(f => (
@@ -576,21 +580,27 @@ export const register: Register = (on, options) => {
               <Text wrap="truncate">{f.name}</Text>
             </Box>
           ))}
-          {isOpen && GROUPS.filter(([g]) => items.some(it => it.group === g)).map(([g, label]) => {
+          {isOpen && GROUPS.filter(([g]) => items.some(it => it.group === g)).map(([g, label, color]) => {
             const list = items.filter(it => it.group === g)
             const isGroupOpen = v.expanded.includes(`${m.name}#${g}`)
             return (
               <Box key={`grp:${m.name}:${g}`} flexDirection="column" marginLeft={2}>
                 <Box flexDirection="row" gap={2}>
-                  <Button key={`group:${m.name}:${g}`} plain onPress={() => toggle(`${m.name}#${g}`)}>{`${isGroupOpen ? '▾' : '▸'} ${label} ${list.length}`}</Button>
-                  <Button key={`all:${m.name}:${g}`} plain onPress={() => pick(list.map(keyOf), !list.every(it => v.picked.includes(keyOf(it))))}>all</Button>
+                  <Button key={`group:${m.name}:${g}`} plain onPress={() => toggle(`${m.name}#${g}`)}>
+                    {isGroupOpen ? '▾ ' : '▸ '}<Text bold color={color}>{label}</Text>{` ${list.length}`}
+                  </Button>
+                  <Button key={`all:${m.name}:${g}`} dimColor onPress={() => pick(list.map(keyOf), !list.every(it => v.picked.includes(keyOf(it))))}>all</Button>
                 </Box>
                 {isGroupOpen && list.map((it, n) => (
                   <Box key={`row:${m.name}:${g}:${n}`} flexDirection="row" gap={1} marginLeft={3}>
                     <Box flexGrow={1} flexShrink={1}>
-                      <Button key={`item:${m.name}:${g}:${n}`} plain onPress={() => pick([keyOf(it)], !v.picked.includes(keyOf(it)))}>{`${v.picked.includes(keyOf(it)) ? '◉' : '○'} ${it.sev.padEnd(4)} ${it.title}`}</Button>
+                      <Button key={`item:${m.name}:${g}:${n}`} plain onPress={() => pick([keyOf(it)], !v.picked.includes(keyOf(it)))}>
+                        {v.picked.includes(keyOf(it)) ? '◉ ' : '○ '}
+                        <Text backgroundColor={SEV_COLOR[it.sev]} color="inverseText">{` ${it.sev.padEnd(4)} `}</Text>
+                        {` ${it.title}`}
+                      </Button>
                     </Box>
-                    <Button key={`go:${m.name}:${g}:${n}`} plain onPress={() => planItems($, m.name, last?.file ?? '', [it])}>▶</Button>
+                    <Button key={`go:${m.name}:${g}:${n}`} onPress={() => planItems($, m.name, last?.file ?? '', [it])}><Text color="success">▶</Text></Button>
                   </Box>
                 ))}
               </Box>
@@ -598,7 +608,7 @@ export const register: Register = (on, options) => {
           })}
           {last !== undefined && chosen.length > 0 && (
             <Box key={`picked:${m.name}`} marginLeft={2}>
-              <Button key={`plan:${m.name}`} plain onPress={async () => {
+              <Button key={`plan:${m.name}`} variant="primary" onPress={async () => {
                 await planItems($, m.name, last.file, chosen)
                 await pick(chosen.map(keyOf), false)
               }}>{`Plan ${chosen.length} selected`}</Button>
@@ -614,7 +624,9 @@ export const register: Register = (on, options) => {
           <Box flexGrow={1}>
             <Text bold wrap="truncate">{`${TITLE} · ${v.project} (${v.mode})`}</Text>
           </Box>
-          <Button key="scan" plain onPress={() => scan($)}>{v.busy.scan === undefined ? 'Scan' : 'scanning…'}</Button>
+          <Button key="scan" dimColor={v.busy.scan !== undefined} onPress={() => scan($)}>
+            {v.busy.scan === undefined ? <Text color="suggestion">Scan</Text> : 'scanning…'}
+          </Button>
         </Box>
         {v.hint !== undefined && (
           <Box key="hint">

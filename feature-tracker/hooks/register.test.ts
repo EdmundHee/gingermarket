@@ -133,6 +133,16 @@ const finish = ($: Engine, answer: string, agentId = 'a1') =>
 
 const textOf = async (pane: Awaited<ReturnType<typeof mount>>, key: string) => (await pane.find({ key }))?.text ?? ''
 
+/** A Button's chrome: undefined type when the key is not drawn. */
+const look = async (pane: Awaited<ReturnType<typeof mount>>, key: string) => {
+  const f = await pane.find({ key })
+  return { type: f?.type, plain: f?.props.plain, variant: f?.props.variant }
+}
+
+/** Props of the first element child of `key`: an item's severity chip. */
+const chipOf = async (pane: Awaited<ReturnType<typeof mount>>, key: string) =>
+  ((await pane.find({ key }))?.children.find(c => typeof c === 'object') as { props?: Record<string, unknown> } | undefined)?.props
+
 /** A subagent's report as the engine hands it back to the main loop: a peer message framed by the harness. */
 const handback = ($: Engine, from: string) =>
   $.prompt.submit({
@@ -527,6 +537,39 @@ describe('feature-tracker', () => {
     expect(seen.submitted[0]).toContain(PRIOR_PATH)
     expect(seen.submitted[0]).toContain('- low · a/y.ts — cache list → memo')
     expect(await pane.find({ key: 'plan:Auth' })).toBeUndefined()
+  })
+
+  test('action_buttons_framed_rows_plain', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'item:Auth:fixes:0' })
+
+    const framed = { type: 'Button', plain: undefined, variant: undefined }
+    expect(await look(pane, 'scan')).toEqual(framed)
+    expect(await look(pane, 'review:Auth')).toEqual(framed)
+    expect(await look(pane, 'note:Auth')).toEqual(framed)
+    expect(await look(pane, 'all:Auth:fixes')).toEqual(framed)
+    expect(await look(pane, 'go:Auth:fixes:0')).toEqual(framed)
+    expect(await look(pane, 'plan:Auth')).toEqual({ ...framed, variant: 'primary' })
+    expect((await look(pane, 'toggle:Auth')).plain).toBe(true)
+    expect((await look(pane, 'group:Auth:fixes')).plain).toBe(true)
+    expect((await look(pane, 'item:Auth:fixes:0')).plain).toBe(true)
+  })
+
+  test('sev_chip_coloured_by_level', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'group:Auth:ideas' })
+
+    expect(await chipOf(pane, 'item:Auth:fixes:0')).toMatchObject({ backgroundColor: 'error', color: 'inverseText' })
+    expect(await chipOf(pane, 'item:Auth:ideas:0')).toMatchObject({ backgroundColor: 'suggestion' })
+    expect(await textOf(pane, 'item:Auth:fixes:0')).toContain('high')
   })
 
   test('note_hidden_until_reviewed', async ($, on) => {
