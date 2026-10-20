@@ -3,24 +3,29 @@
   "owner": {
     "name": "Edmund Hee"
   },
+  "metadata": {
+    "description": "Claude Code plugins by Edmund Hee: plan, git and feature panes beside the chat, and a plan-aware orchestrator for ralph-loop."
+  },
   "plugins": [
     {
       "name": "ralph-helper",
-      "version": "0.4.0",
       "source": "./ralph-helper",
       "description": "Self-improving, plan-aware orchestrator for ralph-loop. Decomposes a plan into phases, injects unit tests, drives execution with test gating/rollback/regression checks, and learns per project via Obsidian memory + graphify search."
     },
     {
       "name": "plan-tracker",
-      "version": "0.4.1",
       "source": "./plan-tracker",
       "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own."
     },
     {
       "name": "git-tracker",
-      "version": "0.1.0",
       "source": "./git-tracker",
       "description": "Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists."
+    },
+    {
+      "name": "feature-tracker",
+      "source": "./feature-tracker",
+      "description": "Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security) logged as checkbox notes in Obsidian or docs/features/, and a Plan fixes button."
     }
   ]
 }
