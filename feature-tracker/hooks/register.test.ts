@@ -79,6 +79,7 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     toasts: [] as string[],
     submitted: [] as string[],
     opened: [] as string[],
+    order: [] as string[], // session.start beneath the plugin (Plan, Git) vs its ui.open
   }
   // The kit hands this hook the Agent tool's own parameters (snake_case) and drops any agentId a hook
   // answers ("set by core"), so spawns are normalised here and agent.list names them a1, a2, …
@@ -97,9 +98,13 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     seen.registered.push(e)
     return { value: { agent: `feature-tracker:${e.name}` } }
   })
-  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.start', (_$, e) => {
+    seen.order.push('session.start')
+    return { cwd: e.cwd }
+  })
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', (_$, e) => {
+    seen.order.push('ui.open')
     seen.opened.push(e.id)
     return { value: { isPlaced: true as const } }
   })
@@ -191,6 +196,14 @@ describe('feature-tracker', () => {
     expect(await pane.find({ key: 'feature:Auth/OAuth' })).toBeDefined()
     expect(await pane.find({ type: 'Text', text: /some free note/ })).toBeUndefined()
     expect(await pane.find({ key: 'module:Billing' })).toBeDefined()
+  })
+
+  test('pane_opens_after_inner_session_start', async ($, on) => {
+    const seen = await start($, on)
+
+    await mount($)
+
+    expect(seen.order).toEqual(['session.start', 'ui.open'])
   })
 
   test('no_inventory_shows_scan_cta', async ($, on) => {

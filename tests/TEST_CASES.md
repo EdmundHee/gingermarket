@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-20 · fd066f8+dirty · validate ✔ · feature-tracker 27/27 (plan-tracker, git-tracker untouched)
+last run: 2026-10-20 · fd066f8+dirty · validate ✔ · feature-tracker 28/28 (plan-tracker, git-tracker untouched) · TC-116 smoke ✔
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -103,6 +103,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-106 | git-tracker refresh button | unit | numstat empty at start, then `3\t0\ta.ts` | 1. start 2. mount Pane 3. press `refresh` | row `a.ts +3`; gh run twice (start + press) | git-tracker/hooks/register.test.ts > refresh_button_reloads_files_and_pr | pass |
 | TC-107 | git-tracker untracked cap | unit | 31 untracked `f01.md`…`f31.md` | 1. start 2. mount Pane | `NEW 30`; `file:f30.md` drawn, `file:f31.md` absent | git-tracker/hooks/register.test.ts > untracked_files_capped_at_30 | pass |
 | TC-108 | marketplace install from clone | smoke | empty `CLAUDE_CONFIG_DIR` in scratchpad | 1. `claude plugin marketplace add <clone>` 2. `claude plugin install <p>@gingermarket` for all 4 3. `claude plugin list` | every step exits 0; list shows 4 plugins @gingermarket | manual | pass |
+| TC-116 | feature-tracker tab after Plan and Git | unit + smoke | a `session.start` hook beneath the plugin (stands for Plan, Git) | 1. start 2. mount Pane; smoke: `claude --plugin-dir feature-tracker` in tmux, capture tab row | inner `session.start` runs before `ui.open feature-tracker`; live tab row `Plan   Git   Features` | feature-tracker/hooks/register.test.ts > pane_opens_after_inner_session_start | pass |
 
 ## Rules
 

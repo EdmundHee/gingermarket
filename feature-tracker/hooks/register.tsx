@@ -465,9 +465,12 @@ export const register: Register = (on, options) => {
         model: 'opus',
       })
       .catch(err => $.ui.log(`feature-tracker: reader not registered: ${String(err)}`, { to: 'debug' }))
-    void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
     await load($)
-    return next(e)
+    const out = await next(e)
+    // Opened once the plugins beneath have started, so the Features tab sits after Plan and Git even when
+    // this mod loads first (`--plugin-dir`). ponytail: Plan before Git still follows their load order
+    void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+    return out
   })
 
   on('prompt.submit', async ($, e, next) => {
