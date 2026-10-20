@@ -1,102 +1,107 @@
 # Procedure: Capture Learnings
 
 This is a shared procedure called by `execute-phase.md` at a phase's **terminal
-outcome** — a successful gate (6f) or a final failure after all retries are
-exhausted (6h). It distills what happened into a durable lesson and writes it to
-three homes so future phases and future runs can learn from it.
+outcome**: a passing gate (step 5) or the final failure after all retries (step 6,
+attempt 3). It distills what happened into one durable lesson and writes it to
+three homes so later phases and future runs can learn from it.
 
 **Call this ONCE per phase, at the terminal outcome only.** Do NOT call it on
-intermediate retries — mid-retry, the full error context is still in the window
-and the agent is adapting live. Capturing half-lessons per retry is noise.
+intermediate retries; a half-lesson per retry is noise.
 
-The calling command MUST provide:
-- **Plan name**, **Phase number**, **Phase name**
+The caller MUST provide:
+- **Slug**, **Phase number**, **Phase name**
 - **Outcome**: `success` or `failure`
-- **Iterations used** and **Retries used** for this phase
-- **Root cause** (what went wrong — required on failure, and on a success that
-  took retries; null on a clean first-try success)
-- **Fix / what worked** (the approach that passed, or — on failure — the last
-  approach tried and why it fell short)
-- **Tests touched** (names/files) and **Browser verified** (true/false/null)
+- **Estimate**, **Iterations** (test-fix cycles the agent reported) and **Attempts**
+- **Root cause** (required on failure and on a success that took retries; null on a
+  clean first-try success)
+- **Fix / what worked** (the approach that passed, or on failure the last approach
+  and why it fell short)
+- **Tests touched** (names/files), **Browser verified** (true/false/null) and
+  **Boundary violation** (true if the gate found a protected file changed)
 
 ---
 
 ## Distill the lesson
 
-Write one caveman-compact lesson, 1–3 lines. Failure or corrected form:
-`[plan/phase] <what failed> — root cause: <X> → fix: <Y>`. Clean-success form:
-`[plan/phase] <what worked>: <the approach / key decision>`. Keep it specific and
-reusable on the *same* codebase (name the file, the framework quirk, the gotcha) —
-not generic advice.
+One caveman-compact lesson, 1–3 lines. Failure or corrected form:
+`<what failed> — root cause: <X> → fix: <Y>`. Clean-success form:
+`<what worked>: <the approach / key decision>`. Specific to *this* codebase (the
+file, the framework quirk, the gotcha), not generic advice.
 
-## Home 1 — Obsidian `_MEMORY.md` (durable, human-readable)
+## Redact before writing anywhere
 
-**Follow the procedure in `procedures/project-memory.md`** with operation
-**RESOLVE**. If a vault folder exists, edit its `_MEMORY.md`: insert the lesson at
-the top of the `## Ralph Learnings` section, merge near-duplicates, keep it
-compact. If RESOLVE reports no vault, skip this home (the other two still capture).
+Root causes come from test and error output. Before any of the three writes,
+replace secrets with `[redacted]`: API keys and tokens (`sk-…`, `ghp_…`, `xox…-`,
+`AKIA…`, long base64/hex strings next to `key`, `token`, `secret`, `password`),
+`Authorization:` / `Bearer` values, and credentials in URLs (`scheme://user:pass@host`
+→ `scheme://[redacted]@host`). The vault is often synced; logs and graphify-out may
+be committed.
 
-## Home 2 — `./logs/<plan-name>/learnings.json` (structured)
+## Home 1 — vault `_MEMORY.md`
 
-Append an entry to the `entries` array (create the file if absent). Schema:
+**Follow `${CLAUDE_PLUGIN_ROOT}/procedures/project-memory.md`** RESOLVE with the
+notes dir. If it prints a folder, add the lesson to `## Ralph Learnings` per its
+write rules (heading added if missing, 10-bullet / 160-char cap). Nothing printed →
+skip this home; the other two still capture.
+
+## Home 2 — `./logs/<slug>/learnings.json`
+
+Read the file. If it exists but does not parse as JSON, `mv` it to
+`learnings.json.bak-$(date +%Y%m%d%H%M%S)` and say so; start a fresh file. Append
+one entry to `entries` and write the whole file back:
 
 ```json
 {
-  "plan": "<plan-name>",
-  "generated_at": "<git date: git log -1 --format=%cd --date=short>",
+  "plan": "<slug>",
   "entries": [
     {
-      "phase": <N>,
+      "phase": 1,
       "phase_name": "<name>",
-      "outcome": "success" | "failure",
-      "iterations": <int>,
-      "retries": <int>,
-      "root_cause": "<text>" | null,
+      "outcome": "success",
+      "estimate": 5,
+      "iterations": 3,
+      "attempts": 1,
+      "root_cause": null,
       "fix": "<text>",
-      "tests_touched": ["<name>", "..."],
-      "browser_verified": true | false | null,
-      "committed_at": "<git sha or date>"
+      "tests_touched": ["<name>"],
+      "browser_verified": null,
+      "boundary_violation": false,
+      "commit": "<done_sha, or start_sha on failure>",
+      "date": "<date +%F>"
     }
   ]
 }
 ```
 
-This is the machine-readable feed `/ralph-helper:evolve` aggregates across
-projects later. Keep it valid JSON.
+`outcome` is `success` or `failure`. `logs/` is git-excluded (run-state preflight),
+so no reset or clean removes earlier entries. This is the feed
+`/ralph-helper:evolve` counts from.
 
-## Home 3 — Graphify (searchable, feeds `reflect`)
+## Home 3 — graphify (searchable, feeds `reflect`)
 
-Run `graphify save-result` so the lesson becomes queryable and feeds
-`graphify reflect` (see `final-report.md`). Map the outcome:
-- terminal success, 0 retries → `--outcome useful`
-- terminal success, ≥1 retry (something was corrected) → `--outcome corrected`
-- terminal failure (phase abandoned) → `--outcome dead_end`
+Only if `graphify` is on PATH and `graphify-out/` exists; otherwise skip and note it.
+Map the outcome: success with 1 attempt → `useful`; success after retries →
+`corrected`; failure → `dead_end`.
+
+Pass every free-text value through a quoted heredoc, never raw inside double
+quotes: backticks or `$(…)` in a lesson would otherwise run as commands.
 
 ```
 graphify save-result \
-  --question "Phase <N> (<phase-name>): <objective in a few words>" \
-  --answer  "<the distilled lesson>" \
-  --type    query \
+  --question "$(cat <<'EOF'
+Phase <N> (<phase name>): <objective in a few words>
+EOF
+)" \
+  --answer "$(cat <<'EOF'
+<the redacted lesson>
+EOF
+)" \
+  --type query \
   --outcome useful|corrected|dead_end \
-  --nodes   <file1> <file2> ...
+  --nodes <file1> <file2>
 ```
 
-`--nodes` takes space-separated node/file names (not a comma list). This writes a
-markdown entry under `graphify-out/memory/`, which `final-report.md`'s
-`graphify reflect` later aggregates into `graphify-out/reflections/LESSONS.md`.
-
-**Scope `--nodes` to the file(s) the outcome is about**, not their correct
-dependencies. On a `corrected`/`dead_end` outcome, `reflect` marks *every* listed
-node as partly "dead end" — so list the file that was **at fault** (e.g. the one
-you had to fix), not the correct building block it should have reused. Tainting a
-good node makes future runs distrust it wrongly.
-
-If the `graphify` CLI is unavailable, skip this home (do not block the gate) and
-note it — Homes 1 and 2 still captured the lesson.
-
-## Ordering note
-
-On the **success** path this runs inside 6f **before** 6g compaction — the lesson
-must be persisted before the context window is compacted away. On the **failure**
-path it runs in 6h's "still failing after all retries" block, after the final
-rollback, so `root_cause`/`fix` reflect everything that was tried.
+`--nodes` takes space-separated file names. **Scope them to the file(s) the outcome
+is about.** On `corrected`/`dead_end`, `reflect` marks every listed node as partly
+a dead end, so list the file that was at fault, not the good building block it
+should have reused.

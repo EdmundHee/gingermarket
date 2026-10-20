@@ -1,146 +1,81 @@
 ---
-description: Analyze a plan, confirm phases, then execute all phases automatically via ralph-loop
-argument-hint: [plan-path]
+description: Analyze a plan, confirm phases, then run every phase automatically, one subagent per phase
+argument-hint: [plan-path] [--yes]
 ---
 
-You are ralph-helper's main orchestrator. If no plan path is provided, you will auto-detect the most recent plan. If this is a pre-analyzed plan (from `/ralph-helper:analyze`), trust its structure and skip redundant decomposition. Otherwise, read it, break it into executable phases with unit tests, get confirmation, and drive the entire build automatically using ralph-loop.
+You are ralph-helper's main orchestrator. You resolve a plan, break it into phases
+with tests, get one confirmation, then run every phase in this same turn: each
+phase in a fresh subagent, gated on the test command's exit code, committed and
+tagged before the next one starts.
+
+- Plugin root: `${CLAUDE_PLUGIN_ROOT}` — procedure files say `${CLAUDE_PLUGIN_ROOT}`
+  for this path.
+- Notes dir (plugin setting): `${user_config.notesDir}` — pass it to the memory
+  procedures as-is; empty or a literal `${user_config.notesDir}` means no vault.
 
 ## STEP 0: RESOLVE PLAN PATH
 
-**Follow the procedure in `procedures/resolve-plan.md`** with:
+If `$ARGUMENTS` contains `--yes`, remember it and remove it; the rest is the plan
+path (possibly empty).
+
+**Follow `${CLAUDE_PLUGIN_ROOT}/procedures/resolve-plan.md`** with that path and:
 - Filter patterns: exclude filenames containing `-agent-` or `-ralph-helper`
 - Prefer progress: No
 - Check pre-analyzed: Yes
 - Confirmation question: "Is this the plan you want to execute?"
 
-## STEP 1: READ AND UNDERSTAND
+**Then check the file exists right away.** If it does not, tell the user and stop —
+before any preflight, branch or graph refresh.
 
-Read the plan file at the resolved plan path. Also read the codebase:
+## STEP 1: PREFLIGHT AND READ
 
-- What language(s) is this project using?
-- **Follow the procedure in `procedures/detect-test-framework.md`** to identify the test framework and patterns.
-- What existing patterns exist (project structure, naming conventions, existing tests)?
-- Is there an existing `./logs/` directory or `PROGRESS.md` from a previous run?
+1. Compute the slug and run the **preflight** in
+   `${CLAUDE_PLUGIN_ROOT}/procedures/run-state.md` (git repo, `logs/` excluded,
+   clean tree, test command). Do not switch branches yet.
+2. If `./logs/<slug>/ralph-helper.json` exists for this plan with phases not
+   `done`, tell the user and suggest `/ralph-helper:resume` instead; continue only
+   if they want to start over.
+3. Read the plan and the codebase: language, structure, existing tests.
+4. Prior lessons: if a vault folder resolves (see
+   `${CLAUDE_PLUGIN_ROOT}/procedures/project-memory.md`), read its `## Ralph
+   Learnings` and let them inform phase sizing and tests.
 
-**Project memory**: durable cross-session memory lives in the project's Obsidian
-`_MEMORY.md` and is auto-injected at session start. Check the current context for a
-`PROJECT MEMORY (...)` block — if present, read its `## Ralph Learnings` section
-and factor prior lessons into phase planning. Then **follow the procedure in
-`procedures/project-memory.md`** with operation **BOOTSTRAP** to ensure the vault
-folder + `_MEMORY.md` exist for this project, so later phases can capture learnings
-and future runs auto-load them. If no Obsidian vault exists on this machine, skip
-it — execution proceeds without it.
+## STEP 2: PHASES
 
-**Codebase search (graphify)**: **follow the procedure in
-`procedures/inject-context.md`** with operation **REFRESH** to keep the knowledge
-graph fresh (`graphify --update` if stale) and install the post-commit rebuild
-hook. Per-phase search happens later in 6b via GATHER. Skip if no graph exists.
+A plan is **pre-analyzed** if its filename ends in `-ralph-helper` or every
+`## Phase` has both `### Tests` and `### Done When`. Then take its phases exactly as
+written (no renumbering) and only fill estimates, `browser` and `protected`.
 
-If the plan file does not exist, tell the user and stop.
+Otherwise **follow `${CLAUDE_PLUGIN_ROOT}/procedures/decompose-plan.md`**.
 
-## STEP 1.5: DETECT PRE-ANALYZED PLAN
+## STEP 3: CONFIRM
 
-After reading the plan, determine if it is a pre-analyzed plan from `/ralph-helper:analyze`. A plan is considered pre-analyzed if:
+Show each phase: name, what it builds, its tests, estimate, done-when and any
+protected files. For a pre-analyzed plan say so: "This plan was pre-analyzed by
+`/ralph-helper:analyze`; phases are used as written."
 
-1. The filename contains `-ralph-helper` (e.g., `my-feature-ralph-helper.md`), **OR**
-2. The plan has `## Phase` headings where every phase contains both a `### Tests` subsection and a `### Done When` subsection
+Unless `--yes` was given, ask the user to confirm. This is the only human
+touchpoint. If they edit the breakdown, apply the edits and show it again. If they
+decline, stop — nothing has been written.
 
-If the plan IS pre-analyzed:
-- Trust the phase structure exactly as written. Do not re-decompose, re-number, or modify the phases.
-- Skip STEP 2 (Decompose into Phases) entirely.
-- Skip STEP 3 (Ensure Every Phase Has Tests) entirely — the tests are already defined.
-- Skip STEP 4 (Estimate Iterations) — instead, estimate iterations inline during STEP 5 presentation.
-- Proceed directly to STEP 5 (Present for Confirmation) with the phases as defined in the file.
+## STEP 4: START THE RUN
 
-If the plan is NOT pre-analyzed:
-- Proceed through all steps normally (STEP 2 through STEP 7 unchanged).
+1. Preflight step 4: `git switch -c ralph/<slug>` (or switch to it).
+2. Write `./logs/<slug>/ralph-helper.json` with the **confirmed** phases, `status:
+   running`, `plan_path`, `branch` and `test_command`. From here on every command
+   reads phases from this file, never from the plan.
+3. **Follow `${CLAUDE_PLUGIN_ROOT}/procedures/inject-context.md`** with operation
+   **REFRESH**.
 
-## STEP 2: DECOMPOSE INTO PHASES
+## STEP 5: EXECUTE
 
-*Skip this step if the plan was detected as pre-analyzed in Step 1.5.*
+For each phase in order, **follow
+`${CLAUDE_PLUGIN_ROOT}/procedures/execute-phase.md`** with the slug, the phase
+number and caller `go`. When it returns success, go straight on to the next phase.
+When it reports a terminal failure, stop: it has already written the failure
+report.
 
-If the plan already has `## Phase` headings, use them as the phase boundaries. Read the `### Tests` and `### Done When` subsections if present.
+## STEP 6: FINAL REPORT
 
-If the plan is flat (no phase headings), reason about:
-
-- **Dependency order**: What needs to exist before the next thing can be built?
-- **Testability boundaries**: Each phase should end with something verifiable.
-- **Size**: Each phase should be achievable in roughly 3-8 ralph-loop iterations. If a phase looks like it needs more than 10, suggest splitting it.
-
-## STEP 3: ENSURE EVERY PHASE HAS TESTS
-
-*Skip this step if the plan was detected as pre-analyzed in Step 1.5.*
-
-This is non-negotiable. For each phase:
-
-- If the plan specifies tests for this phase, use them.
-- If the plan does NOT specify tests, determine what a competent developer would test for what's being built in this phase. Consider:
-  - Unit tests for new functions/methods/components
-  - Integration tests if the phase connects multiple components
-  - Edge cases and error handling
-  - For Phase 2+: regression — all previous phases' tests must still pass
-
-Base your test decisions on the project's language, framework, and existing test patterns you found in Step 1.
-
-## STEP 4: ESTIMATE ITERATIONS
-
-*Skip this step if the plan was detected as pre-analyzed in Step 1.5. Iteration estimates will be determined inline during Step 5.*
-
-For each phase, reason about how many ralph-loop iterations it will likely need:
-
-- How many files or components need to be created/modified?
-- How many tests need to pass?
-- Does it involve external dependencies or integrations?
-- Is there UI work?
-
-General guidance: default around 5, cap at 10.
-
-## STEP 5: PRESENT FOR CONFIRMATION
-
-Present the phase breakdown to the user clearly.
-
-If this is a pre-analyzed plan, note to the user: "This plan was pre-analyzed by `/ralph-helper:analyze`. Phase structure, tests, and completion criteria are used as-is." Then present each phase with its tests and criteria from the file, plus inline iteration estimates.
-
-For each phase, show:
-- Phase name and description
-- What will be built
-- What tests will be required (both from the plan and any you're adding)
-- Estimated iterations
-- Completion criteria
-
-Ask the user to confirm before proceeding. This is the **only human touchpoint** — everything after confirmation is automatic.
-
-If the user wants to edit the breakdown, incorporate their changes and re-present.
-
-## STEP 6: EXECUTE (after confirmation)
-
-Once the user confirms, proceed to fully automatic execution. For each phase, in order:
-
-**Follow the procedure in `procedures/execute-phase.md`** with the phase's plan name, phase number, objectives, test requirements, iteration estimate, completion criteria, and previous phase context.
-
-Loop through all phases sequentially. After each phase completes successfully, proceed to the next.
-
-## BROWSER MCP VERIFICATION
-
-During Step 2 (decomposition), check whether browser MCP tools are available in the current Claude Code session. Look for tools related to Playwright, Puppeteer, or Chrome MCP.
-
-If browser MCP is available:
-- During analysis, identify which phases involve frontend/UI components or end-to-end user flows
-- Mark those phases for browser verification
-- During phase verification (after unit tests pass for a browser-marked phase):
-  - Use the browser MCP to navigate to the local dev server
-  - Execute the E2E scenario described in the phase's tests (look for tests prefixed with "Browser:" or "E2E:")
-  - Take a screenshot as evidence
-  - Include the browser verification result in PROGRESS.md
-
-If browser MCP is NOT available:
-- Skip browser verification entirely
-- Note in PROGRESS.md: "Browser verification skipped — no browser MCP available"
-- Still require all unit/integration tests to pass
-- In the final report, suggest the user verify UI manually
-
-Browser verification is always supplementary — it never replaces unit tests. Unit tests are the hard gate; browser verification is an additional confidence check.
-
-## STEP 7: FINAL REPORT
-
-**Follow the procedure in `procedures/final-report.md`** to generate the final report after all phases complete successfully.
+When every phase is `done`, **follow
+`${CLAUDE_PLUGIN_ROOT}/procedures/final-report.md`** in **success** mode.

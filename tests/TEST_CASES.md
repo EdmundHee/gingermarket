@@ -1,9 +1,9 @@
 # Test cases — gingermarket
 
 screen: n/a
-run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-20 · 931acdf+dirty · validate ✔ · plan-tracker 53/53 · git-tracker 16/16 · feature-tracker 27/27 · TC-108 smoke ✔
-out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
+run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker ; bash ralph-helper/tests/vault-dir.test.sh`
+smoke (by hand, real model calls): `bash ralph-helper/tests/smoke.sh success ; bash ralph-helper/tests/smoke.sh failure`
+last run: 2026-10-20 · fd066f8+dirty · validate ✔ · plan-tracker 53/53 · git-tracker 16/16 · feature-tracker 27/27 · ralph-helper vault-dir 5/5 · smoke success ✔ · smoke failure+resume ✔ · TC-108 ✔
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
 |----|---------|------|--------------|-------|----------|-----------|--------|
@@ -103,12 +103,19 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-106 | git-tracker refresh button | unit | numstat empty at start, then `3\t0\ta.ts` | 1. start 2. mount Pane 3. press `refresh` | row `a.ts +3`; gh run twice (start + press) | git-tracker/hooks/register.test.ts > refresh_button_reloads_files_and_pr | pass |
 | TC-107 | git-tracker untracked cap | unit | 31 untracked `f01.md`…`f31.md` | 1. start 2. mount Pane | `NEW 30`; `file:f30.md` drawn, `file:f31.md` absent | git-tracker/hooks/register.test.ts > untracked_files_capped_at_30 | pass |
 | TC-108 | marketplace install from clone | smoke | empty `CLAUDE_CONFIG_DIR` in scratchpad | 1. `claude plugin marketplace add <clone>` 2. `claude plugin install <p>@gingermarket` for all 4 3. `claude plugin list` | every step exits 0; list shows 4 plugins @gingermarket | manual | pass |
+| TC-109 | ralph-helper vault via groups.json | unit | `/v/_tools/groups.json` maps `syph` → repo `/R/Api`; `/v/syph` exists | 1. `vault-dir.sh /v /r/api` | prints `/v/syph` (case-insensitive repo match) | ralph-helper/tests/vault-dir.test.sh > groups_match_case_insensitive | pass |
+| TC-110 | ralph-helper vault basename | unit | no groups.json; `/v/api` exists | 1. `vault-dir.sh /v /r/api` | prints `/v/api` | ralph-helper/tests/vault-dir.test.sh > basename_fallback | pass |
+| TC-111 | ralph-helper vault folder missing | unit | `/v/api` absent | 1. `vault-dir.sh /v /r/api` | stdout empty, exit 0; stderr names `_tools/new_project.sh` | ralph-helper/tests/vault-dir.test.sh > missing_folder_prints_nothing | pass |
+| TC-112 | ralph-helper no notesDir | unit | — | 1. `vault-dir.sh "" /r/api` | stdout empty, exit 0 | ralph-helper/tests/vault-dir.test.sh > empty_notesdir_is_no_vault | pass |
+| TC-113 | ralph-helper vault glob chars | unit | `/v/app1` exists; repo `/r/app*` | 1. `vault-dir.sh /v '/r/app*'` | stdout empty (no glob match) | ralph-helper/tests/vault-dir.test.sh > glob_chars_match_literally | pass |
+| TC-114 | ralph-helper go, 2 phases | smoke | toy repo on `main`, clean; plan `calc.md`: phase 1 `add`, phase 2 `mul`, unittest tests | 1. `smoke.sh success` | branch `ralph/calc`; 2 phase commits; tags `ralph-helper/calc/phase-1`, `-2`; state phases `done` with `test_exit 0`, `test_count > 0`; learnings.json valid with 2 entries; `git status --porcelain` empty; `logs/` untracked; no `__pycache__` committed | ralph-helper/tests/smoke.sh success | pass |
+| TC-115 | ralph-helper failure, stash, resume | smoke | as TC-114 plus committed `tests/test_guard.py` (`self.fail`), listed "Do not modify"; phase 1 estimate 1 | 1. `smoke.sh failure` (go, then fix guard + commit, then `/ralph-helper:resume calc.md`) | after go: phase 1 `failed`, attempts 3, stash `ralph-helper calc phase 1 failed attempt`, HEAD = `start_sha`, tree clean, learnings.json failure entry; after resume: phase 1 `done` | ralph-helper/tests/smoke.sh failure | pass |
 
 ## Rules
 
 - IDs are never reused. Delete a row only when the feature is gone; keep the ID retired.
 - Retired: TC-061..TC-072 (design-tracker, removed in d90f9cd).
-- One row per behaviour. `Type`: `unit`, `api`, `screen`, `smoke`. No UI pages in this repo, so no screen rows. A `smoke` row is run by hand with the commands in its Steps; its Code test reads `manual`.
+- One row per behaviour. `Type`: `unit`, `api`, `screen`, `smoke`. No UI pages in this repo, so no screen rows. A `smoke` row is run by hand with the commands in its Steps; its Code test is the script that runs it, or `manual`.
 - `Code test` is the test name under `claude plugin test <plugin>` so it can be found alone.
 - `Status` is the result of the last real run: `pass`, `fail`, `todo`. Never `pass` without the run output.
 - A failing row is fixed in the code, not in this table. See `Claude/rules/dev-workflow.md` section 4.

@@ -10,7 +10,7 @@
     {
       "name": "ralph-helper",
       "source": "./ralph-helper",
-      "description": "Self-improving, plan-aware orchestrator for ralph-loop. Decomposes a plan into phases, injects unit tests, drives execution with test gating/rollback/regression checks, and learns per project via Obsidian memory + graphify search."
+      "description": "Plan-aware phase runner: splits a plan into tested phases, runs each in a fresh subagent, gates on the test exit code, commits and tags every phase on its own branch, rolls back failed attempts, and learns per project via Obsidian memory + graphify search."
     },
     {
       "name": "plan-tracker",

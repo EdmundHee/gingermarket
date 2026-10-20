@@ -1,10 +1,19 @@
 {
   "name": "ralph-helper",
-  "version": "0.4.0",
-  "description": "Self-improving, plan-aware orchestrator for ralph-loop. Decomposes a plan into phases, injects unit tests, drives execution with test gating/rollback/regression checks, and learns per project via Obsidian memory + graphify search.",
+  "version": "0.5.0",
+  "description": "Plan-aware phase runner: splits a plan into tested phases, runs each in a fresh subagent, gates on the test exit code, commits and tags every phase on its own branch, rolls back failed attempts, and learns per project via Obsidian memory + graphify search.",
   "author": {
     "name": "Edmund Hee"
   },
   "repository": "https://github.com/EdmundHee/gingermarket",
-  "license": "MIT"
+  "license": "MIT",
+  "userConfig": {
+    "notesDir": {
+      "type": "string",
+      "title": "Notes folder",
+      "description": "Absolute path to an Obsidian folder holding one folder per project (e.g. ~/.obsidian/MyVault/Projects). Ralph Learnings and run session notes go to <notesDir>/<project>/. Empty keeps learnings in logs/<plan>/learnings.json and graphify only.",
+      "required": false,
+      "default": ""
+    }
+  }
 }

@@ -1,110 +1,49 @@
 # Procedure: Project Memory (Obsidian)
 
-This is a shared procedure called by ralph-helper commands. It resolves the
-project's Obsidian vault folder and bootstraps it so the durable, cross-session
-memory layer exists. **Reads are automatic** — a SessionStart hook
-(`~/.claude/hooks/project-memory.sh`) injects the matching project's
-`_MEMORY.md` into every future session by repo/cwd basename. This procedure owns
-the **write** side: it makes sure the folder + `_MEMORY.md` exist so later
-procedures (`capture-learnings.md`, `final-report.md`) have somewhere to write.
+This is a shared procedure called by ralph-helper procedures. It finds the
+project's folder in the user's notes vault and owns the rules for writing into it.
+Vault memory is optional: with no vault, `logs/<slug>/learnings.json` and graphify
+still capture every lesson.
 
-The calling command specifies one **operation**:
-- **RESOLVE** — return the vault folder path for the current project. Create nothing.
-- **BOOTSTRAP** — RESOLVE, then create the folder tree + a seeded `_MEMORY.md` if
-  (and only if) it does not already exist. Idempotent.
+The vault is the plugin setting **notesDir**: a folder holding one folder per
+project (e.g. `~/.obsidian/MyVault/Projects`). Commands print it in their header as
+"Notes dir". Empty, or a literal `${user_config.notesDir}` (setting unset), means no
+vault.
 
 ---
-
-## Vault location & project name
-
-- **Vault root**: `~/.obsidian/GingerVault/Claude Code Logs`.
-- **Project name**: the basename of the git root (`git rev-parse --show-toplevel`),
-  falling back to the basename of `$PWD`. This MUST match how the SessionStart
-  hook resolves the name, or auto-injection will silently miss.
-- **Casing**: the hook matches folder names **case-insensitively** (`find -iname`).
-  The repo may be checked out at a mixed-case path (e.g. `Work/GitHub/...`) while
-  other tools record it lowercase (`work/github/...`). Do not create two folders
-  that differ only in case. When RESOLVE finds an existing folder by
-  case-insensitive match, reuse it verbatim; only create a new folder (using the
-  git-root basename as-is) when none matches.
 
 ## RESOLVE
 
-1. If `~/.obsidian/GingerVault/Claude Code Logs` does **not** exist, the Obsidian
-   vault is not set up on this machine. Return "no vault" — callers must degrade
-   gracefully (skip Obsidian writes; `learnings.json` + graphify still capture
-   everything). Do **not** create the vault root yourself.
-2. Compute the project name (above).
-3. Case-insensitively look for an existing folder:
-   `find "$VAULT" -maxdepth 1 -type d -iname "<project>"`. If found, return it.
-4. If none found, return the intended path `<VAULT>/<project>` (not yet created)
-   plus a flag that it is missing.
+Run:
 
-## BOOTSTRAP
-
-Run RESOLVE first.
-- If RESOLVE returned "no vault": stop, report that Obsidian memory is unavailable
-  on this machine, and let the caller proceed without it.
-- If the folder exists **and** contains `_MEMORY.md`: do nothing (idempotent).
-- Otherwise create:
-  - The project folder (if missing) and subdirs `plans/`, `decisions/`, `sessions/`.
-  - `_MEMORY.md` seeded from the template below, filled from what you already know:
-    the plan being executed, the codebase language/stack (from
-    `detect-test-framework.md` + a quick read), and the project's purpose. Keep it
-    honest — leave a section terse (`_TBD_`) rather than inventing detail.
-
-Never overwrite an existing `_MEMORY.md`. Bootstrapping only fills the gap.
-
-## `_MEMORY.md` structure (source of truth for all writers)
-
-Match the vault's existing convention exactly (see `~/.claude/CLAUDE.md`
-"Project Memory"), plus one ralph-helper-owned section:
-
-```markdown
----
-project: <project>
-updated: <YYYY-MM-DD>
----
-Project: [[<project>]]
-
-# <project> — Memory
-
-## Overview
-<2–3 lines: what this project is.>
-
-## Stack
-<one dense line: framework, DB, deploy.>
-
-## Direction
-<current focus / goals.>
-
-## Features
-<bullets of what exists. `_TBD_` if unknown at bootstrap.>
-
-## Recent Changes
-<one bullet per plan, newest first, each ending in a [[wikilink]].>
-
-## Key Decisions
-<one line each, [[wikilink]] where a decision file exists.>
-
-## Open Threads
-<unfinished work / known risks.>
-
-## Ralph Learnings
-<ralph-helper writes here. One bullet per durable lesson, newest first:
-`- <YYYY-MM-DD> [plan/phase] outcome — root cause → fix / what worked`.
-Merge and rewrite; do NOT append forever. Hard cap enforced by final-report.md.>
+```
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/vault-dir.sh" "<notes dir>"
 ```
 
-- The `Project: [[<project>]]` backlink is what clusters the note in Obsidian's
-  graph view — never omit it.
-- `<YYYY-MM-DD>`: derive from `git log -1 --format=%cd --date=short` (do not guess
-  today's date).
+- It prints the project folder, or nothing.
+- It matches the repo against `<notesDir>/_tools/groups.json` (`projects.<name>.repo`
+  lists git roots, case-insensitive), else uses the git root's basename.
+- It returns a folder only if it already exists. When it doesn't, it prints a hint
+  (naming the vault's `_tools/new_project.sh` when present) on stderr. Pass that
+  hint on to the user once.
 
-## Write conventions (used by callers)
+**Never create the project folder or its subfolders yourself.** A vault has its own
+way to register projects. Nothing printed → skip every vault write.
 
-- **Append a learning**: edit the `## Ralph Learnings` section — insert the new
-  bullet at the top, merge near-duplicates, keep it caveman-compact.
-- **Roll up** (final-report.md): promote durable lessons from `## Ralph Learnings`
-  into `## Features` / `## Key Decisions`, add a `## Recent Changes` bullet for the
-  run, and enforce the ~150-line cap (oldest Recent-Changes lines drop off).
+## Write rules
+
+ralph-helper writes only these, in the folder RESOLVE printed:
+
+- **`_MEMORY.md` → `## Ralph Learnings`** (capture-learnings): if the file exists
+  but has no such heading, append `## Ralph Learnings` at the end. Insert the new
+  lesson as the top bullet, `- <YYYY-MM-DD> [<slug>/phase <N>] <lesson>`, and merge
+  near-duplicates. **Cap: 10 bullets of at most 160 characters each**; drop the
+  oldest beyond 10. If `_MEMORY.md` does not exist, skip; don't seed one.
+- **`sessions/<YYYY-MM-DD>_ralph-<slug>.md`** (final-report): one per run end. If
+  the name exists, add `-2`, `-3`, … The note starts with `Project: [[<project>]]`
+  (the folder name). Skip if there is no `sessions/` folder.
+- **`_MEMORY.md` → `## Recent Changes`** and the hub note `<project>.md` (final-report,
+  success only): one bullet / line ending in the session note's `[[wikilink]]`,
+  newest first. Touch only sections that already exist.
+
+Dates: `date +%F`. Never rewrite other sections of `_MEMORY.md`.

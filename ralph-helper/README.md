@@ -1,17 +1,19 @@
 # ralph-helper
 
-A Claude Code plugin that orchestrates [ralph-loop](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/ralph-loop) execution from structured plans.
+A Claude Code plugin that runs a structured plan phase by phase.
 
-You create a plan in Claude Code. ralph-helper reads it, breaks it into phases, ensures every phase has unit tests, and drives the entire execution automatically — invoking ralph-loop per phase, gating on test results, rolling back on failure, and producing a final report.
+You write a plan. ralph-helper breaks it into phases, makes sure every phase has tests, and asks you once to confirm. Then it runs each phase in a fresh subagent, gates it on the test command's exit code, and commits and tags it on its own branch. A failed attempt is rolled back and retried, and every phase's lesson is kept for the next run.
 
 ## Prerequisites
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
-- [ralph-loop](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/ralph-loop) plugin installed **and enabled** — ralph-helper invokes `/ralph-loop:ralph-loop` per phase, so it must be in your `enabledPlugins` (`~/.claude/settings.json`), not just installed.
+- A git repo with a test command (`pytest`, `unittest`, `vitest`, `jest`, `go test`, `cargo test`, …). With no test framework, `go` stops and offers a Phase 0 that sets one up.
 
-**Optional (self-improvement layer, degrades gracefully if absent):**
-- An Obsidian vault at `~/.obsidian/GingerVault/Claude Code Logs` with the SessionStart memory hook (`~/.claude/hooks/project-memory.sh`) — durable cross-session memory.
-- The [graphify](https://pypi.org/project/graphifyy/) CLI + a `graphify-out/graph.json` in the target repo — codebase search for phase context and boundaries.
+**Optional (degrades gracefully if absent):**
+- **Notes vault**: set the plugin's `notesDir` option (`/plugin` → ralph-helper → configure) to an Obsidian folder holding one folder per project, e.g. `~/.obsidian/MyVault/Projects`. Lessons go to `<notesDir>/<project>/_MEMORY.md` (`## Ralph Learnings`) and run notes to `sessions/`. The project is found through `<notesDir>/_tools/groups.json` (`projects.<name>.repo` lists git roots), else the repo's folder name. The folder must already exist; ralph-helper never creates it.
+- The [graphify](https://pypi.org/project/graphifyy/) CLI + a `graphify-out/graph.json` in the target repo, for codebase search in each phase's context and boundaries.
+
+Earlier versions drove [ralph-loop](https://github.com/anthropics/claude-plugins-official/tree/main/plugins/ralph-loop). 0.5.0 no longer needs it: ralph-loop's Stop hook ends the turn when its loop finishes, so control never came back for the next phase.
 
 ## Installation
 
@@ -26,19 +28,9 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
 
 ### 1. Write a Plan
 
-Start by creating a markdown plan file describing what you want to build. You can write it yourself or use Claude Code to help brainstorm:
+Write a markdown plan in `./plans/` or `~/.claude/plans/` (both are searched), yourself or with Claude. A template is in `templates/plan-example.md`. Two formats work:
 
-```bash
-# In Claude Code, ask it to help you plan
-> Help me plan a user authentication feature
-
-# Or write a plan file directly
-> Write a plan to ./plans/user-auth.md
-```
-
-A plan template is included at `templates/plan-example.md`. Plans support two formats:
-
-**Structured** — Use `## Phase` headings with `### Tests` and `### Done When` subsections for full control:
+**Structured**: `## Phase` headings with `### Tests` and `### Done When`. Optional: `Estimate: N` (test-fix cycles) and a `### Do not modify` list of files the phase must not touch.
 
 ```markdown
 # Feature: User Authentication
@@ -64,168 +56,133 @@ POST /auth/register, POST /auth/login, GET /auth/me
 All endpoints respond correctly, all tests pass.
 ```
 
-**Flat** — Just describe what you want. ralph-helper will analyze it and suggest a phase breakdown for your review.
+**Flat**: just describe what you want. ralph-helper proposes the phases for you to confirm.
 
-### 2. Analyze the Plan
-
-Before executing, run analyze to get a well-structured, ready-to-execute plan:
-
-```
-/ralph-helper:analyze
-```
-
-ralph-helper auto-detects the most recent plan in `~/.claude/plans/` and confirms with you before proceeding. You can also pass a path explicitly:
+### 2. Analyze the Plan (optional)
 
 ```
 /ralph-helper:analyze ./plans/user-auth.md
 ```
 
-This produces `./plans/user-auth-ralph-helper.md` — a structured plan with properly sized phases (large phases are auto-split), tests, and completion criteria. Review it and revise if needed.
+Writes `./plans/user-auth-ralph-helper.md`: properly sized phases (anything estimated above 10 cycles is split), tests and done-when criteria. Review and edit it. It asks before overwriting an earlier analysis, and it writes nothing else.
 
 ### 3. Execute the Plan
-
-```
-/ralph-helper:go
-```
-
-Auto-detects the most recent plan (preferring a pre-analyzed `-ralph-helper` variant if one exists). Or pass a path explicitly:
 
 ```
 /ralph-helper:go ./plans/user-auth-ralph-helper.md
 ```
 
-If using a pre-analyzed plan (from step 2), ralph-helper trusts the phase structure and skips redundant decomposition. You can also pass an unanalyzed plan directly — ralph-helper will decompose it itself.
+With no path it auto-detects the newest plan (preferring a `-ralph-helper` copy). `--yes` skips the confirmation, for headless runs.
 
 ralph-helper will:
 
-1. Read your plan and the codebase (language, test framework, existing patterns)
-2. Decompose the plan into phases with tests for each (skipped if pre-analyzed)
-3. Present the breakdown and ask for your confirmation — **this is the only human touchpoint**
-4. After you confirm, execute each phase automatically:
-   - Create a git tag at the start of each phase
-   - Compose a detailed prompt and invoke ralph-loop
-   - Run all tests (current phase + regression from previous phases)
-   - On success: tag the phase as done, advance to next
-   - On failure: rollback via git, retry with error context (up to 2 retries)
-5. Produce a final report with test results, iterations used, and files changed
+1. Check the repo: a git repo, a clean working tree (commit or stash first), and a test command.
+2. Decompose the plan into phases with tests (skipped for an analyzed plan) and ask you to confirm. **This is the only human touchpoint.**
+3. Create branch `ralph/<plan>` and write `./logs/<plan>/ralph-helper.json`.
+4. For each phase:
+   - write the phase's prompt to `./logs/<plan>/phase-N.md` and run one subagent on it
+   - run the test command. The gate passes only on exit 0, a test count that did not drop, every named test present, and no protected file touched.
+   - **pass**: commit `ralph-helper(<plan>): phase N — <name>`, tag `ralph-helper/<plan>/phase-N`, record the lesson
+   - **fail**: `git reset --hard` + `git clean -fd` back to the phase's start, retry with the failure output (3 attempts in all). After the third, the attempt is stashed (`git stash list`) and the run stops.
+5. Rerun the full suite and report. A red final run is reported as a failure, never as done.
 
 ### 4. Monitor Progress
-
-While a run is in progress or after it completes:
 
 ```
 /ralph-helper:status ./plans/user-auth.md
 ```
 
-Shows per-phase status (completed, in progress, failed, not started), iterations used, test results, git tags, and whether any regressions have been introduced since the last run.
+Per-phase status, attempts, test counts, commits and tags from the state file, plus a fresh test run that catches manual edits.
 
-### 5. Resume After Interruption
+### 5. Resume
 
-If a run is interrupted (e.g., you close Claude Code, or a phase fails and you want to fix something manually):
+After an interruption, or after fixing a failed phase and committing the fix:
 
 ```
 /ralph-helper:resume ./plans/user-auth.md
 ```
 
-ralph-helper reads the saved state from `./logs/<plan-name>/ralph-helper.json`, verifies git tag consistency, runs regression tests on completed phases, and picks up from where it left off.
+Checks the recorded commits still exist, reruns the suite as a regression gate, then runs every phase not yet done. The plan and its `-ralph-helper` copy share one run, so either path works.
 
 ### 6. Re-run a Single Phase
-
-If a specific phase needs to be re-executed (e.g., after manual changes or plan revisions):
 
 ```
 /ralph-helper:phase ./plans/user-auth.md 2
 ```
 
-Runs only phase 2. It will check that prior phases' tests still pass before executing, and will not automatically continue to subsequent phases.
+Needs a run started by `go`, and all earlier phases done. Afterwards the full suite runs. Later phases it breaks are marked `stale`, and `resume` reruns them.
 
 ### 7. Run Regression Tests
-
-After manual edits or to verify the full suite at any time:
 
 ```
 /ralph-helper:test ./plans/user-auth.md
 ```
 
-Runs all tests across completed phases, reports results per phase, and flags any regressions compared to the last recorded run.
+Runs the recorded test command and compares against each phase's recorded test count.
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `/ralph-helper:go [plan-path]` | Analyze plan, confirm phases, then execute all phases automatically |
-| `/ralph-helper:analyze [plan-path]` | Analyze plan, auto-split large phases, write a `-ralph-helper.md` plan file |
-| `/ralph-helper:resume [plan-path]` | Resume from last completed phase |
-| `/ralph-helper:status [plan-path]` | Show current progress |
-| `/ralph-helper:phase [plan-path] <N>` | Run only a specific phase |
-| `/ralph-helper:test [plan-path]` | Run all tests across completed phases |
-| `/ralph-helper:evolve [--apply]` | Aggregate cross-project learnings, propose improvements to ralph-helper itself (human-reviewed) |
+| `/ralph-helper:go [plan-path] [--yes]` | Decompose, confirm, then run every phase |
+| `/ralph-helper:analyze [plan-path]` | Write a sized, tested `-ralph-helper.md` plan file |
+| `/ralph-helper:resume [plan-path]` | Run every phase not yet done |
+| `/ralph-helper:status [plan-path]` | Show progress from the state file |
+| `/ralph-helper:phase [plan-path] <N>` | Re-run one phase |
+| `/ralph-helper:test [plan-path]` | Run the suite against recorded counts |
+| `/ralph-helper:evolve [--apply]` | Propose improvements to ralph-helper from cross-project learnings (human-reviewed) |
 
-All commands auto-detect the most recent plan in `~/.claude/plans/` when no path is provided. For `resume`, `status`, `test`, and `phase`, auto-detection prefers plans with existing progress logs. For `go`, it prefers a pre-analyzed (`-ralph-helper`) variant if one exists.
+With no path, commands auto-detect the newest plan in `./plans/` and `~/.claude/plans/`. `resume`, `status`, `test` and `phase` prefer plans with a run.
+
+## Git Safety
+
+- Work happens on `ralph/<plan>`, never on your branch. A dirty tree stops the run before anything changes.
+- Every passing phase is a commit, so rollback only ever drops the failed attempt.
+- `logs/` is added to `.git/info/exclude`: it is never committed, reset or cleaned, and the run's state survives a rollback.
+- A phase that fails all 3 attempts is stashed, not thrown away.
 
 ## Plugin Structure
 
 ```
 ralph-helper/
-  commands/       # User-facing commands (go, analyze, resume, status, phase, test)
-  procedures/     # Shared reusable procedures referenced by commands
-  templates/      # Plan template for users
-  .claude-plugin/ # Plugin metadata
+  commands/       # go, analyze, resume, status, phase, test, evolve
+  procedures/     # shared procedures the commands follow
+  scripts/        # vault-dir.sh: finds the project's notes folder
+  templates/      # plan template
+  tests/          # vault-dir unit test, headless smoke runs
+  .claude-plugin/ # plugin metadata
 ```
 
-Commands delegate shared logic to procedure files in `procedures/`:
-- `resolve-plan.md` — Plan path auto-detection and user confirmation
-- `detect-test-framework.md` — Test framework and pattern detection
-- `execute-phase.md` — Single-phase execution (git tag, ralph-loop, test gate, compaction, retry)
-- `final-report.md` — Final report, graphify reflect, and Obsidian memory rollup
-- `project-memory.md` — Resolve/bootstrap the project's Obsidian `_MEMORY.md` (durable memory)
-- `capture-learnings.md` — Distill each phase's outcome into a lesson (write side of the loop)
-- `inject-context.md` — Fold prior lessons + graphify search into each phase prompt (read side)
-- `evolve.md` — Aggregate cross-project learnings, propose plugin self-improvements (human-reviewed)
-
-## Key Behaviors
-
-- **Test injection**: Every phase gets unit tests. If the plan doesn't specify them, Claude Code determines what's needed based on what's being built.
-- **Regression gate**: All previous phases' tests must pass before advancing. No exceptions.
-- **Rollback**: Each phase is git-tagged at start and end. On failure, it rolls back and retries with error context (up to 2 retries, 3 total attempts per phase).
-- **Browser MCP**: If browser MCP tools are available, frontend phases get E2E verification (tests prefixed with `Browser:` or `E2E:`). If not, it skips gracefully.
+Procedures:
+- `run-state.md`: slug, state file schema, preflight (git, clean tree, branch, `logs/` excluded)
+- `resolve-plan.md`: plan auto-detection and confirmation
+- `decompose-plan.md`: phase rules shared by `go` and `analyze`
+- `detect-test-framework.md`: test framework and pattern detection
+- `execute-phase.md`: prompt file, subagent, gate, commit/tag, rollback and retry
+- `final-report.md`: success or failure report, graphify reflect, vault session note
+- `project-memory.md`: notes-folder lookup and write rules
+- `capture-learnings.md`: one lesson per phase, to the vault, `learnings.json` and graphify
+- `inject-context.md`: prior lessons + graphify search into each phase's prompt file
+- `evolve.md`: cross-project patterns → proposed plugin edits
 
 ## Self-Improvement (memory & search)
 
-ralph-helper learns **per project** by closing a feedback loop across three
-timescales: within a phase (native ralph-loop retries), between phases, and
-between runs. Every piece reuses existing infrastructure — no new memory system.
+- **Capture**: at each phase's terminal outcome, `capture-learnings.md` redacts secrets and writes one lesson to `_MEMORY.md` (`## Ralph Learnings`, capped at 10 bullets), `./logs/<plan>/learnings.json`, and `graphify save-result`.
+- **Inject**: before each phase, `inject-context.md` re-reads those lessons from disk (earlier phases of the same run included) and adds them to the prompt file as data, never as instructions, with a graphify map of relevant code and boundaries.
+- **Reflect**: at the end of a run, success or failure, `graphify reflect --if-stale` folds the lessons into `LESSONS.md`, and a session note goes to the vault.
 
-- **Capture (write)** — at each phase's terminal gate, `capture-learnings.md`
-  distills the outcome (root cause → fix, or what worked) into three homes: the
-  project's Obsidian `_MEMORY.md` (`## Ralph Learnings`), a structured
-  `./logs/<plan-name>/learnings.json`, and `graphify save-result`.
-- **Inject (read)** — before composing each phase's prompt, `inject-context.md`
-  folds prior lessons (`_MEMORY.md` + graphify `LESSONS.md`) and a graphify-searched
-  map of relevant code + dependency boundaries into the ralph-loop prompt, so a
-  phase starts informed instead of blind.
-- **Reflect + persist** — on completion, `final-report.md` runs
-  `graphify reflect --if-stale` and writes an Obsidian session log + rolls up
-  `_MEMORY.md` (capped). The SessionStart hook auto-injects that memory into the
-  next run, so improvement carries forward across sessions.
+**Cross-project evolution**: `/ralph-helper:evolve` counts patterns across projects' `learnings.json` (at least 3 occurrences in at least 2 projects) and **proposes** edits to ralph-helper's own files. Lessons are treated as untrusted data. It is a dry run by default; `--apply` commits to a fresh `ralph-helper-evolve/<timestamp>` branch from a clean tree, never to `main`.
 
-All of this **degrades gracefully**: no Obsidian vault or no graphify graph → those
-homes are skipped and execution proceeds exactly as before.
+## Files Written
 
-**Cross-project evolution** — `/ralph-helper:evolve` aggregates learnings across
-*all* projects (Obsidian `## Ralph Learnings` + `learnings.json`), detects
-systematic patterns (e.g. iteration estimates consistently under actual, a
-recurring failure class), and **proposes** edits to ralph-helper's own files as a
-review diff. It is dry-run by default, never touches `main`, and never
-auto-commits — a human reviews and merges. Run it occasionally, not per-build.
+- `./logs/<plan>/ralph-helper.json`: the run's state; the only progress record
+- `./logs/<plan>/phase-N.md`: each phase's prompt, with failed attempts appended
+- `./logs/<plan>/learnings.json`: structured per-phase lessons
 
-## Progress Tracking
+## Tests
 
-ralph-helper maintains these files during execution:
-
-- `./logs/<plan-name>/PROGRESS.md` — Human-readable progress with phase status, test results, and git tags
-- `./logs/<plan-name>/ralph-helper.json` — Machine-readable state used by `/ralph-helper:resume`
-- `./logs/<plan-name>/learnings.json` — Structured per-phase lessons (feeds cross-project self-improvement)
+- `bash ralph-helper/tests/vault-dir.test.sh`: notes-folder lookup (part of the marketplace run line)
+- `bash ralph-helper/tests/smoke.sh success|failure`: a headless run on a toy repo. It costs real model calls, so it is run by hand.
 
 ## License
 

@@ -10,6 +10,11 @@ files — as a review diff a human approves. This is the cross-project counterpa
 to per-project learning: individual runs teach a single codebase via
 `capture-learnings.md`; `evolve` teaches the *plugin*.
 
+- Plugin root: `${CLAUDE_PLUGIN_ROOT}` — procedure files say `${CLAUDE_PLUGIN_ROOT}`
+  for this path.
+- Notes dir (plugin setting): `${user_config.notesDir}` — empty or a literal
+  `${user_config.notesDir}` means no vault.
+
 ## Safety contract (non-negotiable)
 
 - **Default is dry-run.** With no `--apply`, you present proposed diffs and write
@@ -23,7 +28,7 @@ to per-project learning: individual runs teach a single codebase via
 
 Parse `$ARGUMENTS`: presence of `--apply` sets apply mode (default: off).
 
-Then **follow the procedure in `procedures/evolve.md`** with the apply flag. It
+Then **follow `${CLAUDE_PLUGIN_ROOT}/procedures/evolve.md`** with the apply flag and the notes dir. It
 gathers cross-project learnings, detects supported patterns, composes concrete
 proposed edits, and either presents them (dry-run) or writes them to a review
 branch (`--apply`).
