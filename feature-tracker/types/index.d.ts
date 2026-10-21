@@ -17,6 +17,7 @@ export type Item = {
 /** A module's newest review note. */
 export type Latest = {
   file: string // absolute path
+  date: string // YYYY-MM-DD, from its file name
   sha: string // the commit it reviewed, `nogit` outside a repo
   items: Item[] // unticked findings, in note order
   stale?: number // files under the module's paths changed since `sha`

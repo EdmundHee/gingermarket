@@ -37,7 +37,7 @@ const TAGGED_NOTE =
   '- [ ] med · a/misc.ts — loose type → narrow\n'
 /** INV plus a Billing module, and a Billing note whose two fixes are both high `billing-db`. */
 const INV_BILLING = `${INV}\n## Billing\npaths: b/**\n- [done] Pay — card\n`
-const BILLING_PATH = `${DOCS}/reviews/2026-10-12_billing-abc1234.md`
+const BILLING_PATH = `${DOCS}/reviews/2026-10-15_billing-abc1234.md`
 const BILLING_NOTE =
   '---\ntype: review\nmodule: Billing\nsha: abc1234\n---\n# Review — Billing (abc1234)\n\n## Missing handling\n' +
   '- [ ] high · `billing-db` · b/pay.ts:3 — double charge → idempotency key\n' +
@@ -1029,6 +1029,8 @@ describe('feature-tracker', () => {
     const grid = await pane.find({ key: 'cards' })
     expect(grid?.props.columnGap).toBe(1)
     expect(grid?.props.gap).toBeUndefined() // a row gap leaves a blank line between bordered rows
+    expect(grid?.props.paddingTop).toBe(1)
+    expect(card?.props.marginTop).toBe(-1) // drawn over the bottom border of the card above
   })
 
   test('card_width_splits_three_ways', async ($, on) => {
@@ -1133,5 +1135,15 @@ describe('feature-tracker', () => {
 
     expect((await pane.find({ key: 'layout:1' }))?.props.variant).toBe('primary')
     expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
+  })
+
+  test('card_shows_its_note_date', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:2' })
+
+    expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.text).toContain('2026-10-12')
+    expect((await pane.find({ key: 'card:Billing:fixes:billing-db' }))?.text).toContain('2026-10-15')
   })
 })

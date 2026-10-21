@@ -327,7 +327,7 @@ function byTag(list: Item[]) {
 }
 
 /** One PR: a tag of a module's Fixes or Ideas, its findings high first. */
-type Card = { module: string; group: Item['group']; tag: string; file: string; items: Item[] }
+type Card = { module: string; group: Item['group']; tag: string; file: string; date: string; items: Item[] }
 
 /** Every module's PRs as cards, most urgent first; ties keep module, then Fixes before Ideas, then tag order. */
 function cards(v: View): Card[] {
@@ -338,7 +338,7 @@ function cards(v: View): Card[] {
       if (last === undefined) return []
       return GROUPS.flatMap(([g]) => {
         const list = last.items.filter(it => it.group === g)
-        return byTag(list).map(tag => ({ module: m.name, group: g, tag, file: last.file, items: list.filter(it => it.tag === tag).sort(bySev) }))
+        return byTag(list).map(tag => ({ module: m.name, group: g, tag, file: last.file, date: last.date, items: list.filter(it => it.tag === tag).sort(bySev) }))
       })
     })
     .sort(byUrgency(c => c.items))
@@ -365,7 +365,7 @@ async function load($: EngineInterface) {
     const items: Item[] = findings(text)
       .filter(f => !f.isTicked)
       .map(f => ({ group: f.bucket === IDEAS ? ('ideas' as const) : ('fixes' as const), line: f.line, sev: f.sev, tag: f.tag || UNTAGGED, title: f.title }))
-    latest[m.name] = { file: top.path, sha, items, stale: await staleOf($, sha, m.paths), dirty }
+    latest[m.name] = { file: top.path, date: top.date, sha, items, stale: await staleOf($, sha, m.paths), dirty }
   }))
   await update($, view, v => ({
     ...v, project: ctx.project, mode: ctx.mode, root: ctx.root, hint: ctx.hint, hasInventory: text !== undefined, modules, latest,
@@ -709,9 +709,15 @@ export const register: Register = (on, options) => {
       const isOpen = v.expanded.includes(fold)
       const sevs = SEVS.filter(s => c.items.some(it => it.sev === s))
       const label = GROUPS.find(([g]) => g === c.group)?.[1]
+      // marginTop -1: this card's top border is drawn over the bottom border of the card above, so rows share a line
       return (
-        <Box key={`card:${id}`} flexDirection="column" width={width} borderStyle="round" borderColor={SEV_COLOR[sevs[0] ?? 'low']} paddingX={1}>
-          <Text bold wrap="truncate">{c.tag}</Text>
+        <Box key={`card:${id}`} flexDirection="column" width={width} borderStyle="round" borderColor={SEV_COLOR[sevs[0] ?? 'low']} paddingX={1} marginTop={-1}>
+          <Box flexDirection="row" gap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Text bold wrap="truncate">{c.tag}</Text>
+            </Box>
+            <Text dimColor>{c.date}</Text>
+          </Box>
           <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
           <Text wrap="truncate">
             {sevs.map((s, i) => <Text color={SEV_COLOR[s]}>{`${i ? ' · ' : ''}${c.items.filter(it => it.sev === s).length} ${s}`}</Text>)}
@@ -746,7 +752,7 @@ export const register: Register = (on, options) => {
       const per = Math.max(1, Math.min(n, Math.floor((cols + 1) / (CARD_MIN + 1))))
       const width = Math.floor((cols - (per - 1)) / per)
       return (
-        <Box key="cards" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start">
+        <Box key="cards" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start" paddingTop={1}>
           {list.map(c => cardBox(c, width))}
         </Box>
       )

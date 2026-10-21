@@ -41,16 +41,17 @@ dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
 
 ```
 ╭──────────────────────────────╮ ╭──────────────────────────────╮
-│ auth-login                   │ │ postgres                     │
+│ auth-login        2026-10-21 │ │ postgres          2026-10-21 │
 │ Auth · Fixes                 │ │ Billing · Fixes              │
 │ 1 high · 1 low               │ │ 1 med                        │
 │ ▾ 2 findings        [ PR ▶ ] │ │ ▸ 1 finding         [ PR ▶ ] │
 │  high  No rate limit  [ ▶ ]  │ ╰──────────────────────────────╯
 │  low   Weak message   [ ▶ ]  │
-╰──────────────────────────────╯
+╭──────────────────────────────╮
+│ db-pool           2026-10-19 │
 ```
 
-A card's findings are listed high first. **PR ▶** and **▶** send the same plan prompts as the list
+The date is the day of the review note the card's findings come from. A row of cards shares its top line with the bottom of the row above. A card's findings are listed high first. **PR ▶** and **▶** send the same plan prompts as the list
 does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
 the `stale` badge are in the list only. The layout you pick is kept for the next session and after `/clear`.
 
