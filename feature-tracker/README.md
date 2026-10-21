@@ -81,7 +81,9 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    findings. Click findings to select them, or `all` for the whole group, then **Plan N selected**.
    **▶** plans one finding right away. Each way Claude gets a plan-mode prompt that quotes the chosen note
    lines and asks it to check each one against the current code first, dropping or lowering any
-   that is wrong or overstated. With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
+   that is wrong or overstated. It also asks Claude to tick each finding's box in the note once it is
+   fixed or dropped. The pane re-reads the note after every turn, so a ticked finding leaves its group.
+   With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
    the newest review note (`open`, else `xdg-open`, else a toast with its path). Notes written
    before tags show their findings under `untagged` until the module's next review.
 

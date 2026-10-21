@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · fd3c08b+wip (feat/feature-tracker-pr-groups) · validate ✔ · feature-tracker 57/57 · plan-tracker 53/53 · git-tracker 17/17
+last run: 2026-10-21 · fe7a935+wip (feat/feature-tracker-0-3-1) · validate ✔ · feature-tracker 59/59 · plan-tracker 53/53 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -134,6 +134,8 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-149 | feature-tracker tag group lists its items | unit | as TC-148 | 1. as TC-148 2. press `tag:Auth:fixes:auth-login` | 2 `item:` rows, both auth-login titles; postgres title not drawn | feature-tracker/hooks/register.test.ts > tag_group_lists_its_items | pass |
 | TC-150 | feature-tracker PR ▶ plans whole group | unit | as TC-148 | 1. as TC-148 2. press `pr:Auth:fixes:auth-login` | `pr:` is a Button without `plain`; one submitted prompt with both auth-login lines and `one branch and one PR for area auth-login`, no postgres line | feature-tracker/hooks/register.test.ts > pr_button_plans_tag_group | pass |
 | TC-151 | feature-tracker old note untagged | unit | Auth note as TC-126 (no tags) | 1. mount 2. press `toggle:Auth`, `group:Auth:fixes` | one tag row `tag:Auth:fixes:untagged` = `▸ untagged 1 · 1 high` | feature-tracker/hooks/register.test.ts > untagged_note_shows_one_group | pass |
+| TC-152 | feature-tracker plan prompt asks to tick | unit | as TC-148 | 1. as TC-148 2. press `pr:Auth:fixes:auth-login` | submitted prompt has `tick its "- [ ]" box in <note path>` | feature-tracker/hooks/register.test.ts > plan_prompt_asks_to_tick_note | pass |
+| TC-153 | feature-tracker ticked finding leaves group after turn | unit | as TC-148 | 1. as TC-148 2. note's high `auth-login` line becomes `[x]` 3. raise main `turn.complete` (no agentId) | `tag:Auth:fixes:auth-login` = `▸ auth-login 1 · 1 low` | feature-tracker/hooks/register.test.ts > ticked_finding_leaves_group_after_main_turn | pass |
 
 ## Rules
 
