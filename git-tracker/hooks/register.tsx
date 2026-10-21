@@ -16,6 +16,8 @@ const EMPTY: GitView = { branch: '', ahead: 0, behind: 0, graph: [], files: [] }
 const view = atom({ plugin: 'git-tracker', key: 'view' } as const, EMPTY)
 
 const lines = (s: string) => s.split('\n').filter(Boolean)
+/** git keeps a commit subject's control characters; one in a Text gets the whole pane refused. */
+const printable = (s: string) => s.replace(/[\u0000-\u001f\u007f-\u009f]/g, '')
 
 async function run($: EngineInterface, ...argv: string[]) {
   const r = await $.process.run(argv)
@@ -77,7 +79,7 @@ async function snapshot($: EngineInterface): Promise<GitView> {
     parent: parent?.name,
     ahead: parent?.ahead ?? 0,
     behind: parent?.behind ?? 0,
-    graph: lines(log.out).slice(0, GRAPH_LINES),
+    graph: lines(log.out).slice(0, GRAPH_LINES).map(printable),
     files: await changes($, fork),
   }
 }
