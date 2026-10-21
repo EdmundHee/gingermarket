@@ -920,6 +920,29 @@ describe('feature-tracker', () => {
     expect(seen.submitted[0]).not.toContain('no pool')
   })
 
+  test('plan_prompt_asks_to_tick_note', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'pr:Auth:fixes:auth-login' })
+
+    expect(seen.submitted[0]).toContain(`tick its "- [ ]" box in ${PRIOR_PATH}`)
+  })
+
+  test('ticked_finding_leaves_group_after_main_turn', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+    seen.fs.map.set(PRIOR_PATH, TAGGED_NOTE.replace('- [ ] high · `auth-login`', '- [x] high · `auth-login`'))
+
+    await $.turn.complete({ reason: 'answer', answer: 'fixed', durationMs: 1, isAborted: false, turnId: 't-main' })
+
+    expect(await textOf(pane, 'tag:Auth:fixes:auth-login')).toBe('▸ auth-login 1 · 1 low')
+  })
+
   test('untagged_note_shows_one_group', async ($, on) => {
     await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
     const pane = await mount($)
