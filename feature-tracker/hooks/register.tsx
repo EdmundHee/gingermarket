@@ -738,8 +738,8 @@ export const register: Register = (on, options) => {
           </Box>
           {isOpen && c.items.map((it, i) => (
             <Box key={`crow:${id}:${i}`} flexDirection="row" gap={1}>
-              <Box flexGrow={1} flexShrink={1}>
-                <Text wrap="truncate">{chip(it.sev)}{` ${it.title}`}</Text>
+              <Box key={`ctitle:${id}:${i}`} flexGrow={1} flexShrink={1}>
+                <Text wrap="wrap">{chip(it.sev)}{` ${it.title}`}</Text>
               </Box>
               <Button key={`go:${id}:${i}`} onPress={() => planItems($, c.module, c.file, [it])}><Text color="success">▶</Text></Button>
             </Box>

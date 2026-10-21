@@ -1073,6 +1073,17 @@ describe('feature-tracker', () => {
     expect(await pane.find({ key: 'sum:Auth:fixes:auth-login' })).toBeUndefined() // the open list shows it
   })
 
+  test('open_card_wraps_titles', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+    await pane.press({ key: 'layout:2' })
+
+    await pane.press({ key: 'fold:Auth:fixes:auth-login' })
+
+    expect((await pane.find({ key: 'ctitle:Auth:fixes:auth-login:0' }))?.text).toContain('no rate limit')
+    expect((await chipOf(pane, 'ctitle:Auth:fixes:auth-login:0'))?.wrap).toBe('wrap') // the whole title, not cut to one line
+  })
+
   test('card_buttons_submit_plan_prompts', async ($, on) => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
     const pane = await mount($, 96)
