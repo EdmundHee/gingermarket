@@ -711,16 +711,17 @@ export const register: Register = (on, options) => {
       const label = GROUPS.find(([g]) => g === c.group)?.[1]
       return (
         <Box key={`card:${id}`} flexDirection="column" width={width} borderStyle="round" borderColor={SEV_COLOR[sevs[0] ?? 'low']} paddingX={1}>
-          <Text bold wrap="truncate">{c.tag}</Text>
-          <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
-          <Text wrap="truncate">
-            {sevs.map((s, i) => <Text color={SEV_COLOR[s]}>{`${i ? ' · ' : ''}${c.items.filter(it => it.sev === s).length} ${s}`}</Text>)}
-          </Text>
+          <Box flexDirection="row" gap={2}>
+            <Button key={`fold:${id}`} plain onPress={() => toggle(fold)}>{isOpen ? '▾ ' : '▸ '}<Text bold>{c.tag}</Text></Button>
+            <Box flexShrink={1}>
+              <Text wrap="truncate">
+                {sevs.map((s, i) => <Text color={SEV_COLOR[s]}>{`${i ? ' · ' : ''}${c.items.filter(it => it.sev === s).length} ${s}`}</Text>)}
+              </Text>
+            </Box>
+          </Box>
           <Box flexDirection="row" gap={1}>
             <Box flexGrow={1} flexShrink={1}>
-              <Button key={`fold:${id}`} plain onPress={() => toggle(fold)}>
-                {`${isOpen ? '▾' : '▸'} ${c.items.length} finding${c.items.length === 1 ? '' : 's'}`}
-              </Button>
+              <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
             </Box>
             <Button key={`pr:${id}`} onPress={() => planItems($, c.module, c.file, c.items, c.tag)}><Text color="success">PR ▶</Text></Button>
           </Box>

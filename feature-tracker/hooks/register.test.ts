@@ -1023,7 +1023,8 @@ describe('feature-tracker', () => {
     expect(card?.text).toContain('auth-login')
     expect(card?.text).toContain('Auth · Fixes')
     expect(card?.text).toContain('1 high · 1 low')
-    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▸ 2 findings')
+    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▸ auth-login')
+    expect(card?.children.filter(c => typeof c === 'object')).toHaveLength(2) // tag + counts, module · group + PR ▶
     expect(card?.props.width).toBe(47)
     expect(card?.props.borderStyle).toBe('round')
     const grid = await pane.find({ key: 'cards' })
@@ -1048,7 +1049,7 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'fold:Auth:fixes:auth-login' })
 
     const card = await pane.find({ key: 'card:Auth:fixes:auth-login' })
-    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▾ 2 findings')
+    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▾ auth-login')
     expect(card?.text).toContain('no rate limit')
     expect(card?.text).toContain('weak message')
     expect(card?.text).not.toContain('no pool')
