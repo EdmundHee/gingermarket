@@ -55,15 +55,23 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    their module with ` (new)`, new modules go at the end of the file. It never rewrites or removes a
    line of yours.
 2. **Review** on a module (or `/feature-tracker review <module>`). A read-only opus subagent
-   (Read/Grep/Glob only) reviews that module's paths and writes a new note,
-   `reviews/YYYY-MM-DD_<module>-<sha7>.md`, with one `- [ ]` checkbox per finding.
+   (Read/Grep/Glob only) reviews that module's paths. A second run of it then checks each finding
+   against the code (the button shows `verifying…`): `true` stays, `partly` stays with a
+   `verify: partly — …` line, and `false` goes under `## Rejected by verifier`, already ticked, with
+   the reason. It can re-rate severity. Then the mod writes a new note,
+   `reviews/YYYY-MM-DD_<module>-<sha7>.md`, with one `- [ ]` checkbox per finding and
+   `verified: n/m` in its frontmatter. If the check fails, the findings are kept as the reviewer
+   wrote them and the toast says `unverified`. Untick a rejected finding to bring it back.
+   Files under the module's paths that were uncommitted at review time are recorded as `dirty: N`,
+   and the pane shows `dirty`, since the note's sha doesn't hold what the reviewer read.
 3. **Tick a box** in the note when a finding is fixed or not worth fixing. The next review of that
    module reads the last 5 notes. Ticked findings are not repeated, and open ones it finds fixed are
    listed under `## Resolved since last review`. Old notes are never rewritten, so the history stays.
 4. **Expand** a module (▸) to see `Fixes N` and `Ideas N`. Open a group to list its unticked findings.
    Click findings to select them, or `all` for the whole group, then **Plan N selected**. **▶** plans
    one finding right away. Either way Claude gets a plan-mode prompt that quotes the chosen note
-   lines. With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
+   lines and asks it to check each one against the current code first, dropping or lowering any
+   that is wrong or overstated. With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
    the newest review note (`open`, else `xdg-open`, else a toast with its path).
 
 A module shows `stale · N files` once files under its paths have changed since the commit it was last
@@ -84,8 +92,8 @@ that entry's `group` and `stack`. If the folder doesn't exist, the pane says so 
 
 ## Cost
 
-Each Scan and each Review is one opus subagent run that reads code with tools, so cost grows with the
-module's size. Nothing runs on its own. Staleness and the pane use only git and file reads.
+Each Scan is one opus subagent run that reads code with tools. A Review with findings is two (review,
+then verify); one with none is one. Cost grows with the module's size. Nothing runs on its own. Staleness and the pane use only git and file reads.
 
 The engine also hands each reader's report to your main session as a message, which would start a
 Claude turn over it. The mod already has the report, so it drops that message. You'll see
