@@ -41,14 +41,16 @@ dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
 
 ```
 ╭──────────────────────────────╮ ╭──────────────────────────────╮
-│ ▾ auth-login  1 high · 1 low │ │ ▸ postgres  1 med            │
-│ Auth · Fixes        [ PR ▶ ] │ │ Billing · Fixes     [ PR ▶ ] │
+│ auth-login                   │ │ postgres                     │
+│ Auth · Fixes                 │ │ Billing · Fixes              │
+│ 1 high · 1 low               │ │ 1 med                        │
+│ ▾ 2 findings        [ PR ▶ ] │ │ ▸ 1 finding         [ PR ▶ ] │
 │  high  No rate limit  [ ▶ ]  │ ╰──────────────────────────────╯
 │  low   Weak message   [ ▶ ]  │
 ╰──────────────────────────────╯
 ```
 
-Click a card's tag (▸) to list its findings, high first. **PR ▶** and **▶** send the same plan prompts as the list
+A card's findings are listed high first. **PR ▶** and **▶** send the same plan prompts as the list
 does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
 the `stale` badge are in the list only. The layout you pick is kept for the next session and after `/clear`.
 
