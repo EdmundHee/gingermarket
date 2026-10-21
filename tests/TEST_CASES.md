@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · 012cc3a+wip (feat/feature-tracker-0-4-1-layout-sticks) · validate ✔ · feature-tracker 72/72 · plan-tracker 53/53 · git-tracker 17/17
+last run: 2026-10-21 · 012cc3a+wip (feat/feature-tracker-0-4-1-layout-sticks) · validate ✔ · feature-tracker 73/73 · plan-tracker 53/53 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -148,7 +148,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-163 | feature-tracker layout back next session | unit | as TC-156; store `layout` = 2 | 1. start 2. mount at bodyColumns 96 | session.start `ui.open` asks columns 96; `layout:2` primary; `card:Billing:fixes:billing-db` drawn, no `toggle:Auth` | feature-tracker/hooks/register.test.ts > stored_layout_returns_next_session | pass |
 | TC-164 | feature-tracker /clear keeps layout | unit | as TC-156; empty store | 1. press `layout:2` 2. `classic.SessionStart` source `clear` 3. mount | `card:` Boxes drawn; that `ui.open` asks columns 96 | feature-tracker/hooks/register.test.ts > clear_keeps_layout | pass |
 | TC-165 | feature-tracker bad stored layout | unit | INV; store `layout` = `"wide"` | 1. start 2. mount | `layout:1` primary; `toggle:Auth` drawn | feature-tracker/hooks/register.test.ts > bad_stored_layout_falls_back_to_list | pass |
-| TC-166 | feature-tracker card shows note date | unit | as TC-156; Billing note dated 2026-10-15 | 1. press `layout:2` | `card:Auth:fixes:auth-login` text has `2026-10-12`; `card:Billing:fixes:billing-db` text has `2026-10-15` | feature-tracker/hooks/register.test.ts > card_shows_its_note_date | todo |
+| TC-166 | feature-tracker card shows note date | unit | as TC-156; Billing note dated 2026-10-15 | 1. press `layout:2` | `card:Auth:fixes:auth-login` text has `2026-10-12`; `card:Billing:fixes:billing-db` text has `2026-10-15` | feature-tracker/hooks/register.test.ts > card_shows_its_note_date | pass |
 
 ## Rules
 
