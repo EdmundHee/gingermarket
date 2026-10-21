@@ -25,6 +25,7 @@ const BUCKETS = [
 const IDEAS = 'Improvement' // not a defect: its own group in the pane
 const UNTAGGED = 'untagged' // the tag row of findings from notes written before tags
 const TAG_CHARS = 24 // so a tag row and its PR button fit the 48-column pane
+const CARD_MIN = 24 // a PR card's least width; a narrower pane draws fewer cards per row
 const REJECTED = 'Rejected by verifier' // ticked, so the pane hides them and the next review gets them as DO NOT REPEAT
 type Bucket = (typeof BUCKETS)[number][0]
 const SEVS = ['high', 'med', 'low'] as const
@@ -51,7 +52,7 @@ const SEVERITY =
 const FINDING = /^- \[([ xX])\] (high|med|low) · (?:`([a-z0-9-]+)` · )?(.+?) — (.+?) → /
 const FEATURE = /^- \[(planned|partial|done|broken)\] (.+?)(?: — (.*))?$/
 const NEW = / \(new\)$/
-const EMPTY: View = { project: '', mode: 'repo', root: '', hasInventory: false, modules: [], latest: {}, busy: {}, expanded: [], picked: [] }
+const EMPTY: View = { project: '', mode: 'repo', root: '', hasInventory: false, modules: [], latest: {}, busy: {}, expanded: [], picked: [], layout: 1 }
 const view = atom({ plugin: 'feature-tracker', key: 'view' } as const, EMPTY)
 
 const READER_SYS =
@@ -313,13 +314,34 @@ function note(m: Module, sha: string, date: string, r: Review, dirty: number) {
 
 // ---- the pane's data ----
 
-/** A group's tags, most urgent first: more highs, then meds, then lows; ties keep note order. */
+/** Most urgent first, by the items `of` gives: more highs, then meds, then lows; ties keep their order. */
+const byUrgency = <T,>(of: (x: T) => Item[]) => (a: T, b: T) => {
+  const count = (x: T) => SEVS.map(s => of(x).filter(it => it.sev === s).length)
+  const [x, y] = [count(a), count(b)]
+  return SEVS.map((_, i) => (y[i] ?? 0) - (x[i] ?? 0)).find(d => d !== 0) ?? 0
+}
+
+/** A group's tags, most urgent first; ties keep note order. */
 function byTag(list: Item[]) {
-  const count = (tag: string) => SEVS.map(s => list.filter(it => it.tag === tag && it.sev === s).length)
-  return [...new Set(list.map(it => it.tag))].sort((a, b) => {
-    const [x, y] = [count(a), count(b)]
-    return SEVS.map((_, i) => (y[i] ?? 0) - (x[i] ?? 0)).find(d => d !== 0) ?? 0
-  })
+  return [...new Set(list.map(it => it.tag))].sort(byUrgency(tag => list.filter(it => it.tag === tag)))
+}
+
+/** One PR: a tag of a module's Fixes or Ideas, its findings high first. */
+type Card = { module: string; group: Item['group']; tag: string; file: string; items: Item[] }
+
+/** Every module's PRs as cards, most urgent first; ties keep module, then Fixes before Ideas, then tag order. */
+function cards(v: View): Card[] {
+  const bySev = (a: Item, b: Item) => SEVS.findIndex(s => s === a.sev) - SEVS.findIndex(s => s === b.sev)
+  return v.modules
+    .flatMap(m => {
+      const last = v.latest[m.name]
+      if (last === undefined) return []
+      return GROUPS.flatMap(([g]) => {
+        const list = last.items.filter(it => it.group === g)
+        return byTag(list).map(tag => ({ module: m.name, group: g, tag, file: last.file, items: list.filter(it => it.tag === tag).sort(bySev) }))
+      })
+    })
+    .sort(byUrgency(c => c.items))
 }
 
 async function staleOf($: EngineInterface, sha: string, paths: string[]) {
@@ -574,6 +596,12 @@ async function planItems($: EngineInterface, module: string, file: string, items
   toast($, `sent ${items.length} finding${one ? '' : 's'} for ${module}`)
 }
 
+/** Opens or re-seats the pane, asking a dock as wide as its layout: 48 for the list, 96 or 144 for cards. */
+async function openPane($: EngineInterface) {
+  const { layout } = await read($, view)
+  return $.ui.open({ id: PANE, title: TITLE, columns: layout * DOCK_COLUMNS })
+}
+
 // ponytail: macOS `open`, then Linux `xdg-open`; anything else gets the path in a toast
 async function openNote($: EngineInterface, file: string) {
   if ((await run($, ['open', file])).ok || (await run($, ['xdg-open', file])).ok) return
@@ -601,7 +629,7 @@ export const register: Register = (on, options) => {
     const out = await next(e)
     // Opened once the plugins beneath have started, so the Features tab sits after Plan and Git even when
     // this mod loads first (`--plugin-dir`). ponytail: Plan before Git still follows their load order
-    void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+    void openPane($)
     return out
   })
 
@@ -610,7 +638,7 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', async ($, e, next) => {
     if (e.source === 'clear') {
       await reset($)
-      void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+      void openPane($)
     }
     return next(e)
   })
@@ -653,7 +681,7 @@ export const register: Register = (on, options) => {
       if (busyNow.has(m.name)) return { text: `${m.name} is already being reviewed.` }
       return { text: (await review($, m)) ? `Reviewing ${m.name} with opus…` : `Review of ${m.name} did not start; see the toast.` }
     }
-    const opened = await $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+    const opened = await openPane($)
     return { text: opened.isPlaced ? 'Features pane opened.' : `Features pane waits: ${opened.reason}` }
   })
 
@@ -665,6 +693,61 @@ export const register: Register = (on, options) => {
       update($, view, s => ({ ...s, expanded: s.expanded.includes(name) ? s.expanded.filter(x => x !== name) : [...s.expanded, name] }))
     const pick = (keys: string[], isOn: boolean) =>
       update($, view, s => ({ ...s, picked: [...s.picked.filter(k => !keys.includes(k)), ...(isOn ? keys : [])] }))
+    const setLayout = async (layout: View['layout']) => {
+      await update($, view, s => ({ ...s, layout }))
+      await openPane($)
+    }
+    const chip = (sev: string) => <Text backgroundColor={SEV_COLOR[sev]} color="inverseText">{` ${sev.padEnd(4)} `}</Text>
+
+    // ponytail: a card has no pick, Review or stale badge; the list keeps them
+    const cardBox = (c: Card, width: number) => {
+      const id = `${c.module}:${c.group}:${c.tag}`
+      const fold = `${c.module}#${c.group}#${c.tag}` // the list's tag-row key: open in one layout, open in the other
+      const isOpen = v.expanded.includes(fold)
+      const sevs = SEVS.filter(s => c.items.some(it => it.sev === s))
+      const label = GROUPS.find(([g]) => g === c.group)?.[1]
+      return (
+        <Box key={`card:${id}`} flexDirection="column" width={width} borderStyle="round" borderColor={SEV_COLOR[sevs[0] ?? 'low']} paddingX={1}>
+          <Text bold wrap="truncate">{c.tag}</Text>
+          <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
+          <Text wrap="truncate">
+            {sevs.map((s, i) => <Text color={SEV_COLOR[s]}>{`${i ? ' · ' : ''}${c.items.filter(it => it.sev === s).length} ${s}`}</Text>)}
+          </Text>
+          <Box flexDirection="row" gap={1}>
+            <Box flexGrow={1} flexShrink={1}>
+              <Button key={`fold:${id}`} plain onPress={() => toggle(fold)}>
+                {`${isOpen ? '▾' : '▸'} ${c.items.length} finding${c.items.length === 1 ? '' : 's'}`}
+              </Button>
+            </Box>
+            <Button key={`pr:${id}`} onPress={() => planItems($, c.module, c.file, c.items, c.tag)}><Text color="success">PR ▶</Text></Button>
+          </Box>
+          {isOpen && c.items.map((it, i) => (
+            <Box key={`crow:${id}:${i}`} flexDirection="row" gap={1}>
+              <Box flexGrow={1} flexShrink={1}>
+                <Text wrap="truncate">{chip(it.sev)}{` ${it.title}`}</Text>
+              </Box>
+              <Button key={`go:${id}:${i}`} onPress={() => planItems($, c.module, c.file, [it])}><Text color="success">▶</Text></Button>
+            </Box>
+          ))}
+        </Box>
+      )
+    }
+
+    /** `n` cards per row, fewer when the pane is too narrow for `CARD_MIN` each; a row's cards fill its width. */
+    const grid = (n: number) => {
+      const list = cards(v)
+      if (list.length === 0) {
+        return <Box key="nocards"><Text dimColor>No open findings. Review a module from List.</Text></Box>
+      }
+      const cols = e.props.bodyColumns
+      const per = Math.max(1, Math.min(n, Math.floor((cols + 1) / (CARD_MIN + 1))))
+      const width = Math.floor((cols - (per - 1)) / per)
+      return (
+        <Box key="cards" flexDirection="row" flexWrap="wrap" gap={1} alignItems="flex-start">
+          {list.map(c => cardBox(c, width))}
+        </Box>
+      )
+    }
 
     const moduleBox = (m: Module) => {
       const isOpen = v.expanded.includes(m.name)
@@ -740,7 +823,7 @@ export const register: Register = (on, options) => {
                             <Box flexGrow={1} flexShrink={1}>
                               <Button key={`item:${m.name}:${g}:${n}`} plain onPress={() => pick([keyOf(it)], !v.picked.includes(keyOf(it)))}>
                                 {v.picked.includes(keyOf(it)) ? '◉ ' : '○ '}
-                                <Text backgroundColor={SEV_COLOR[it.sev]} color="inverseText">{` ${it.sev.padEnd(4)} `}</Text>
+                                {chip(it.sev)}
                                 {` ${it.title}`}
                               </Button>
                             </Box>
@@ -776,13 +859,20 @@ export const register: Register = (on, options) => {
             {v.busy.scan === undefined ? <Text color="suggestion">Scan</Text> : 'scanning…'}
           </Button>
         </Box>
+        <Box key="layout" flexDirection="row" gap={1}>
+          {([1, 2, 3] as const).map(n => (
+            <Button key={`layout:${n}`} variant={v.layout === n ? 'primary' : undefined} dimColor={v.layout !== n} onPress={() => setLayout(n)}>
+              {n === 1 ? 'List' : `${n} col`}
+            </Button>
+          ))}
+        </Box>
         {v.hint !== undefined && (
           <Box key="hint">
             <Text color="warning">{v.hint}</Text>
           </Box>
         )}
         {!v.hasInventory && <Text dimColor>No features.md yet. Scan drafts one from the code; edit it by hand after.</Text>}
-        {v.modules.map(moduleBox)}
+        {v.layout === 1 ? v.modules.map(moduleBox) : grid(v.layout)}
       </Box>
     )
   })

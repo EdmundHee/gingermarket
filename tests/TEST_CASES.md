@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · fe7a935+wip (feat/feature-tracker-0-3-1) · validate ✔ · feature-tracker 59/59 · plan-tracker 53/53 · git-tracker 17/17
+last run: 2026-10-21 · 2d41b90+wip (feat/feature-tracker-0-4-0-pr-cards) · validate ✔ · feature-tracker 68/68 · plan-tracker 53/53 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -136,6 +136,14 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-151 | feature-tracker old note untagged | unit | Auth note as TC-126 (no tags) | 1. mount 2. press `toggle:Auth`, `group:Auth:fixes` | one tag row `tag:Auth:fixes:untagged` = `▸ untagged 1 · 1 high` | feature-tracker/hooks/register.test.ts > untagged_note_shows_one_group | pass |
 | TC-152 | feature-tracker plan prompt asks to tick | unit | as TC-148 | 1. as TC-148 2. press `pr:Auth:fixes:auth-login` | submitted prompt has `tick its "- [ ]" box in <note path>` | feature-tracker/hooks/register.test.ts > plan_prompt_asks_to_tick_note | pass |
 | TC-153 | feature-tracker ticked finding leaves group after turn | unit | as TC-148 | 1. as TC-148 2. note's high `auth-login` line becomes `[x]` 3. raise main `turn.complete` (no agentId) | `tag:Auth:fixes:auth-login` = `▸ auth-login 1 · 1 low` | feature-tracker/hooks/register.test.ts > ticked_finding_leaves_group_after_main_turn | pass |
+| TC-154 | feature-tracker layout switch default list | unit | INV + TAGGED_NOTE; Pane bodyColumns 96 | 1. start 2. mount | `layout:1` = `List` with `variant` primary; `layout:2` = `2 col`, `layout:3` = `3 col`; `toggle:Auth` drawn; no `card:` Box | feature-tracker/hooks/register.test.ts > layout_switch_defaults_to_list | pass |
+| TC-155 | feature-tracker switch widens pane | unit | as TC-154 | 1. press `layout:2` 2. press `layout:3` 3. press `layout:1` | the three `ui.open` after start ask columns 96, 144, 48 in order; after 3 `toggle:Auth` drawn again | feature-tracker/hooks/register.test.ts > layout_switch_requests_pane_width | pass |
+| TC-156 | feature-tracker cards most critical first | unit | INV + `## Billing` (`b/**`); Auth TAGGED_NOTE; Billing BILLING_NOTE (2× high `billing-db`); bodyColumns 96 | 1. press `layout:2` | `card:` Box keys in order `card:Billing:fixes:billing-db`, `card:Auth:fixes:auth-login`, `card:Auth:fixes:postgres`, `card:Auth:fixes:untagged`; no `toggle:Auth` | feature-tracker/hooks/register.test.ts > cards_sorted_by_criticality | pass |
+| TC-157 | feature-tracker card summary and size | unit | as TC-156; (b) bodyColumns 144 | 1. press `layout:2` (b) press `layout:3` | `card:Auth:fixes:auth-login` text has `auth-login`, `Auth · Fixes`, `1 high · 1 low`, `▸ 2 findings`; its width 47 and borderStyle `round`; (b) width 47 | feature-tracker/hooks/register.test.ts > card_shows_summary_and_width, card_width_splits_three_ways | pass |
+| TC-158 | feature-tracker card expands to findings | unit | as TC-156 | 1. press `layout:2` 2. press `fold:Auth:fixes:auth-login` | `fold:Auth:fixes:auth-login` = `▾ 2 findings`; card text has `no rate limit` and `weak message`; 2 `go:Auth:fixes:auth-login:` Buttons; `no pool` not in it | feature-tracker/hooks/register.test.ts > card_expands_to_its_findings | pass |
+| TC-159 | feature-tracker card triggers work | unit | as TC-156 | 1. press `layout:2` 2. press `pr:Billing:fixes:billing-db` 3. press `fold:Auth:fixes:auth-login`, `go:Auth:fixes:auth-login:0` | 1st prompt has `one branch and one PR for area billing-db` and the Billing note path; 2nd prompt has one auth-login line, the high `no rate limit` (card rows high first), and no `one PR` | feature-tracker/hooks/register.test.ts > card_buttons_submit_plan_prompts | pass |
+| TC-160 | feature-tracker no cards | unit | INV, no review notes | 1. press `layout:2` | `nocards` text has `No open findings`; `scan` drawn | feature-tracker/hooks/register.test.ts > grid_without_findings_says_so | pass |
+| TC-161 | feature-tracker narrow pane fewer cards | unit | as TC-156; bodyColumns 48 | 1. press `layout:3` | `card:Auth:fixes:auth-login` width 48 (one per row) | feature-tracker/hooks/register.test.ts > narrow_pane_wraps_cards | pass |
 
 ## Rules
 
