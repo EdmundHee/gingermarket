@@ -10,6 +10,7 @@ export type Item = {
   group: 'fixes' | 'ideas' // ideas: under `## Improvement`
   line: string // the note line after `- [ ] `: `sev · file[:line] — title → fix`
   sev: string
+  tag: string // product area, one PR per tag; `untagged` for notes written before tags
   title: string
 }
 
@@ -31,7 +32,7 @@ export type View = {
   modules: Module[]
   latest: Record<string, Latest> // by module name
   busy: Record<string, 'scanning' | 'reviewing' | 'verifying'> // `scan`, or a module name
-  expanded: string[] // module names, and `<module>#fixes` / `<module>#ideas` groups
+  expanded: string[] // module names, `<module>#fixes` / `<module>#ideas` groups, and `<module>#<group>#<tag>` tag rows
   picked: string[] // `<note path>\t<item line>` chosen for Plan N selected
 }
 
