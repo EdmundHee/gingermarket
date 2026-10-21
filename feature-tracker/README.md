@@ -13,6 +13,7 @@ modules and the features inside each one. It also runs an opus review per module
 
 ```
 Features · syph (vault)             [ Scan ]
+[ List ] [ 2 col ] [ 3 col ]
 ▾ Auth
   3✓ 1◐ 1○ 0✗ · 2 open · 1 idea · stale · 3 files
   [ Review ] [ Note ]
@@ -32,6 +33,26 @@ Features · syph (vault)             [ Scan ]
 
 Actions are framed (`[ … ]`); module, group and finding rows are plain. Severity shows as a filled chip:
 `high` red, `med` yellow, `low` blue. Status counts take their glyph's colour, and `stale` is yellow.
+
+**2 col** and **3 col** swap the module list for PR cards: one card per tag of every module's
+Fixes and Ideas, most urgent first (more `high`, then `med`, then `low`), the border in its worst
+severity's colour. The pane asks the dock for 96 or 144 columns (**List** asks 48 again); a width you
+dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
+
+```
+╭──────────────────────────────╮ ╭──────────────────────────────╮
+│ auth-login                   │ │ postgres                     │
+│ Auth · Fixes                 │ │ Billing · Fixes              │
+│ 1 high · 1 low               │ │ 1 med                        │
+│ ▾ 2 findings        [ PR ▶ ] │ │ ▸ 1 finding         [ PR ▶ ] │
+│  high  No rate limit  [ ▶ ]  │ ╰──────────────────────────────╯
+│  low   Weak message   [ ▶ ]  │
+╰──────────────────────────────╯
+```
+
+A card's findings are listed high first. **PR ▶** and **▶** send the same plan prompts as the list
+does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
+the `stale` badge are in the list only. The layout goes back to the list in a new session.
 
 ## Install
 

@@ -35,6 +35,13 @@ const TAGGED_NOTE =
   '- [ ] low · `auth-login` · a/login.ts:9 — weak message → reword\n' +
   '- [ ] high · `auth-login` · a/login.ts:42 — no rate limit → add limiter\n' +
   '- [ ] med · a/misc.ts — loose type → narrow\n'
+/** INV plus a Billing module, and a Billing note whose two fixes are both high `billing-db`. */
+const INV_BILLING = `${INV}\n## Billing\npaths: b/**\n- [done] Pay — card\n`
+const BILLING_PATH = `${DOCS}/reviews/2026-10-12_billing-abc1234.md`
+const BILLING_NOTE =
+  '---\ntype: review\nmodule: Billing\nsha: abc1234\n---\n# Review — Billing (abc1234)\n\n## Missing handling\n' +
+  '- [ ] high · `billing-db` · b/pay.ts:3 — double charge → idempotency key\n' +
+  '- [ ] high · `billing-db` · b/refund.ts — refund race → lock row\n'
 /** The verifier's answer with no verdicts: every finding is kept as the reader wrote it. */
 const NO_VERDICTS = '{"verdicts":[]}'
 
@@ -89,6 +96,7 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     toasts: [] as string[],
     submitted: [] as string[],
     opened: [] as string[],
+    widths: [] as Array<number | undefined>, // each ui.open's columns
     order: [] as string[], // session.start beneath the plugin (Plan, Git) vs its ui.open
   }
   // The kit hands this hook the Agent tool's own parameters (snake_case) and drops any agentId a hook
@@ -116,6 +124,7 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
   on('ui.open', (_$, e) => {
     seen.order.push('ui.open')
     seen.opened.push(e.id)
+    seen.widths.push(e.columns)
     return { value: { isPlaced: true as const } }
   })
   on('ui.log', () => ({ value: undefined }))
@@ -134,8 +143,8 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
   return seen
 }
 
-const mount = ($: Engine) =>
-  $.ui.mount({ plugin: 'feature-tracker', surface: 'terminal', component: 'Pane', requestId: 'feature-tracker', props: PANE })
+const mount = ($: Engine, bodyColumns = PANE.bodyColumns) =>
+  $.ui.mount({ plugin: 'feature-tracker', surface: 'terminal', component: 'Pane', requestId: 'feature-tracker', props: { ...PANE, bodyColumns } })
 
 /** The reader subagent `agentId` ends its run with `answer`. */
 const finish = ($: Engine, answer: string, agentId = 'a1') =>
@@ -953,5 +962,118 @@ describe('feature-tracker', () => {
     const keys = (await pane.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('tag:'))
     expect(keys).toEqual(['tag:Auth:fixes:untagged'])
     expect(await textOf(pane, 'tag:Auth:fixes:untagged')).toBe('▸ untagged 1 · 1 high')
+  })
+
+  test('layout_switch_defaults_to_list', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+
+    const pane = await mount($, 96)
+
+    expect(await textOf(pane, 'layout:1')).toBe('List')
+    expect((await pane.find({ key: 'layout:1' }))?.props.variant).toBe('primary')
+    expect(await textOf(pane, 'layout:2')).toBe('2 col')
+    expect(await textOf(pane, 'layout:3')).toBe('3 col')
+    expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
+    expect((await pane.findAll({ type: 'Box' })).some(b => b.key?.startsWith('card:'))).toBe(false)
+  })
+
+  test('layout_switch_requests_pane_width', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($, 96)
+    const before = seen.widths.length
+
+    await pane.press({ key: 'layout:2' })
+    await pane.press({ key: 'layout:3' })
+    await pane.press({ key: 'layout:1' })
+
+    expect(seen.widths.slice(before)).toEqual([96, 144, 48])
+    expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
+  })
+
+  test('cards_sorted_by_criticality', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:2' })
+
+    const keys = (await pane.findAll({ type: 'Box' })).map(b => b.key ?? '').filter(k => k.startsWith('card:'))
+    expect(keys).toEqual(['card:Billing:fixes:billing-db', 'card:Auth:fixes:auth-login', 'card:Auth:fixes:postgres', 'card:Auth:fixes:untagged'])
+    expect(await pane.find({ key: 'toggle:Auth' })).toBeUndefined()
+  })
+
+  test('card_shows_summary_and_width', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:2' })
+
+    const card = await pane.find({ key: 'card:Auth:fixes:auth-login' })
+    expect(card?.text).toContain('auth-login')
+    expect(card?.text).toContain('Auth · Fixes')
+    expect(card?.text).toContain('1 high · 1 low')
+    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▸ 2 findings')
+    expect(card?.props.width).toBe(47)
+    expect(card?.props.borderStyle).toBe('round')
+  })
+
+  test('card_width_splits_three_ways', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 144)
+
+    await pane.press({ key: 'layout:3' })
+
+    expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.props.width).toBe(47)
+  })
+
+  test('card_expands_to_its_findings', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+    await pane.press({ key: 'layout:2' })
+
+    await pane.press({ key: 'fold:Auth:fixes:auth-login' })
+
+    const card = await pane.find({ key: 'card:Auth:fixes:auth-login' })
+    expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▾ 2 findings')
+    expect(card?.text).toContain('no rate limit')
+    expect(card?.text).toContain('weak message')
+    expect(card?.text).not.toContain('no pool')
+    const go = (await pane.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('go:Auth:fixes:auth-login:'))
+    expect(go).toHaveLength(2)
+  })
+
+  test('card_buttons_submit_plan_prompts', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+    await pane.press({ key: 'layout:2' })
+
+    await pane.press({ key: 'pr:Billing:fixes:billing-db' })
+    await pane.press({ key: 'fold:Auth:fixes:auth-login' })
+    await pane.press({ key: 'go:Auth:fixes:auth-login:0' })
+
+    expect(seen.submitted).toHaveLength(2)
+    expect(seen.submitted[0]).toContain('one branch and one PR for area billing-db')
+    expect(seen.submitted[0]).toContain(BILLING_PATH)
+    expect(seen.submitted[1]?.match(/`auth-login`/g)).toHaveLength(1)
+    expect(seen.submitted[1]).toContain('no rate limit') // a card lists its findings high first
+    expect(seen.submitted[1]).not.toContain('one PR')
+  })
+
+  test('grid_without_findings_says_so', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:2' })
+
+    expect(await textOf(pane, 'nocards')).toContain('No open findings')
+    expect(await pane.find({ key: 'scan' })).toBeDefined()
+  })
+
+  test('narrow_pane_wraps_cards', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 48)
+
+    await pane.press({ key: 'layout:3' })
+
+    expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.props.width).toBe(48)
   })
 })
