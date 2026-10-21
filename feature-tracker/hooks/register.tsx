@@ -719,6 +719,12 @@ export const register: Register = (on, options) => {
             <Text dimColor>{c.date}</Text>
           </Box>
           <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
+          {!isOpen && (
+            // ponytail: the worst finding's title stands for the PR; an opus summary per tag needs every module re-reviewed
+            <Box key={`sum:${id}`} height={2} overflow="hidden">
+              <Text wrap="wrap">{c.items[0]?.title}</Text>
+            </Box>
+          )}
           <Text wrap="truncate">
             {sevs.map((s, i) => <Text color={SEV_COLOR[s]}>{`${i ? ' · ' : ''}${c.items.filter(it => it.sev === s).length} ${s}`}</Text>)}
           </Text>
