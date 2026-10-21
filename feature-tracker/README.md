@@ -13,7 +13,7 @@ modules and the features inside each one. It also runs an opus review per module
 
 ```
 Features · syph (vault)             [ Scan ]
-[ List ] [ 2 col ] [ 3 col ]
+[ List ] [ PR cards ]
 ▾ Auth
   3✓ 1◐ 1○ 0✗ · 2 open · 1 idea · stale · 3 files
   [ Review ] [ Note ]
@@ -34,25 +34,27 @@ Features · syph (vault)             [ Scan ]
 Actions are framed (`[ … ]`); module, group and finding rows are plain. Severity shows as a filled chip:
 `high` red, `med` yellow, `low` blue. Status counts take their glyph's colour, and `stale` is yellow.
 
-**2 col** and **3 col** swap the module list for PR cards: one card per tag of every module's
-Fixes and Ideas, most urgent first (more `high`, then `med`, then `low`), the border in its worst
-severity's colour. The pane asks the dock for 96 or 144 columns (**List** asks 48 again); a width you
-dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
+**PR cards** swaps the module list for cards: one per tag of every module's Fixes, most urgent
+first (more `high`, then `med`, then `low`), then one per tag of every module's Ideas, sorted the same way, so an
+idea never sits above a fix. A gradient badge at top right says ` fix ` (red to orange) or ` idea `
+(purple to blue), and the border takes its worst severity's colour. The pane asks the dock for 96
+columns (**List** asks 48 again); a width you dragged wins, and a pane too narrow for two 24-column
+cards draws one per row.
 
 ```
 ╭──────────────────────────────╮ ╭──────────────────────────────╮
-│ auth-login        2026-10-21 │ │ postgres          2026-10-21 │
-│ Auth · Fixes                 │ │ Billing · Fixes              │
+│ auth-login               fix │ │ postgres                 fix │
+│ Auth · 2026-10-21            │ │ Billing · 2026-10-21         │
 │ 1 high · 1 low               │ │ No pool cap: each request    │
 │ ▾ 2 findings        [ PR ▶ ] │ │ opens a new connection and   │
 │  high  No rate limit  [ ▶ ]  │ │ the database runs out        │
 │  low   Weak message   [ ▶ ]  │ │ 1 med                        │
 ╰──────────────────────────────╯ │ ▸ 1 finding         [ PR ▶ ] │
 ╭──────────────────────────────╮ ╰──────────────────────────────╯
-│ db-pool           2026-10-19 │
+│ cache-list              idea │
 ```
 
-The date is the day of the review note the card's findings come from. Under the module, a closed card shows its most severe finding's title in full, so you can tell what the PR is for without opening it. A row of cards shares its top line with the bottom of the row above. Open a card to read each finding's whole title, wrapped, high first. **PR ▶** and **▶** send the same plan prompts as the list
+Line 2 is the module and the day of the review note the card's findings come from. Under it, a closed card shows its most severe finding's title in full, so you can tell what the PR is for without opening it. A row of cards shares its top line with the bottom of the row above. Open a card to read each finding's whole title, wrapped, high first. **PR ▶** and **▶** send the same plan prompts as the list
 does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
 the `stale` badge are in the list only. The layout you pick is kept for the next session and after `/clear`.
 
