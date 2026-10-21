@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · 4c5e845+wip (fix/plan-tracker-clear-reload) · validate ✔ · feature-tracker 73/73 · plan-tracker 55/55 · git-tracker 17/17
+last run: 2026-10-21 · 0362bd3+wip (fix/plan-tracker-clear-reload) · validate ✔ · feature-tracker 74/74 · plan-tracker 55/55 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -151,6 +151,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-166 | feature-tracker card shows note date | unit | as TC-156; Billing note dated 2026-10-15 | 1. press `layout:2` | `card:Auth:fixes:auth-login` text has `2026-10-12`; `card:Billing:fixes:billing-db` text has `2026-10-15` | feature-tracker/hooks/register.test.ts > card_shows_its_note_date | pass |
 | TC-167 | plan-tracker /clear reloads tracker | unit | store holds seeded #1 open; after start, store replaced by #1 verified, #2 open | 1. `$.classic.SessionStart` source `clear` | state equals the replaced store tracker | plan-tracker/hooks/register.test.ts > clear_reloads_tracker | pass |
 | TC-168 | plan-tracker /clear frees queued item | unit | seeded #1 open | 1. mount Pane 2. press `work:1` 3. `$.classic.SessionStart` source `clear` 4. press `work:1` | two prompts submitted | plan-tracker/hooks/register.test.ts > clear_frees_queued_item | pass |
+| TC-169 | feature-tracker card summary | unit | as TC-156; bodyColumns 96 | 1. press `layout:2` 2. press `fold:Auth:fixes:auth-login` | after 1: `sum:Auth:fixes:auth-login` height 2, overflow hidden, text `no rate limit` (the high, not `weak message`); after 2: no `sum:` Box | feature-tracker/hooks/register.test.ts > card_summary_is_top_finding | pass |
 
 ## Rules
 

@@ -1058,6 +1058,21 @@ describe('feature-tracker', () => {
     expect(go).toHaveLength(2)
   })
 
+  test('card_summary_is_top_finding', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+    await pane.press({ key: 'layout:2' })
+
+    const sum = await pane.find({ key: 'sum:Auth:fixes:auth-login' })
+    expect(sum?.text).toBe('no rate limit') // the high, not the low `weak message`
+    expect(sum?.props.height).toBe(2)
+    expect(sum?.props.overflow).toBe('hidden')
+
+    await pane.press({ key: 'fold:Auth:fixes:auth-login' })
+
+    expect(await pane.find({ key: 'sum:Auth:fixes:auth-login' })).toBeUndefined() // the open list shows it
+  })
+
   test('card_buttons_submit_plan_prompts', async ($, on) => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
     const pane = await mount($, 96)
