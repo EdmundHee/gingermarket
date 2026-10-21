@@ -1065,8 +1065,8 @@ describe('feature-tracker', () => {
 
     const sum = await pane.find({ key: 'sum:Auth:fixes:auth-login' })
     expect(sum?.text).toBe('no rate limit') // the high, not the low `weak message`
-    expect(sum?.props.height).toBe(2)
-    expect(sum?.props.overflow).toBe('hidden')
+    expect(sum?.props.height).toBeUndefined() // the whole title, never cut
+    expect(sum?.props.overflow).toBeUndefined()
 
     await pane.press({ key: 'fold:Auth:fixes:auth-login' })
 

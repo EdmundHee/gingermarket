@@ -44,14 +44,15 @@ dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
 │ auth-login        2026-10-21 │ │ postgres          2026-10-21 │
 │ Auth · Fixes                 │ │ Billing · Fixes              │
 │ 1 high · 1 low               │ │ No pool cap: each request    │
-│ ▾ 2 findings        [ PR ▶ ] │ │ opens a new connection and … │
-│  high  No rate limit  [ ▶ ]  │ │ 1 med                        │
-│  low   Weak message   [ ▶ ]  │ │ ▸ 1 finding         [ PR ▶ ] │
+│ ▾ 2 findings        [ PR ▶ ] │ │ opens a new connection and   │
+│  high  No rate limit  [ ▶ ]  │ │ the database runs out        │
+│  low   Weak message   [ ▶ ]  │ │ 1 med                        │
+╰──────────────────────────────╯ │ ▸ 1 finding         [ PR ▶ ] │
 ╭──────────────────────────────╮ ╰──────────────────────────────╯
 │ db-pool           2026-10-19 │
 ```
 
-The date is the day of the review note the card's findings come from. Under the module, a closed card shows its most severe finding's title, in up to 2 lines, so you can tell what the PR is for without opening it. A row of cards shares its top line with the bottom of the row above. Open a card to read each finding's whole title, wrapped, high first. **PR ▶** and **▶** send the same plan prompts as the list
+The date is the day of the review note the card's findings come from. Under the module, a closed card shows its most severe finding's title in full, so you can tell what the PR is for without opening it. A row of cards shares its top line with the bottom of the row above. Open a card to read each finding's whole title, wrapped, high first. **PR ▶** and **▶** send the same plan prompts as the list
 does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
 the `stale` badge are in the list only. The layout you pick is kept for the next session and after `/clear`.
 
