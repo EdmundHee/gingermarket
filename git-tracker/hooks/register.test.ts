@@ -105,6 +105,15 @@ describe('git-tracker', () => {
     expect(drawn).toEqual(lines.slice(0, 12))
   })
 
+  test('graph_subject_control_chars_stripped', async ($, on) => {
+    await start($, on, { ...repo(), [LOG]: '* 3e1c2aa feat: \u001b[31mred\u0007 bell\n' })
+
+    const pane = await mount($)
+
+    expect(await pane.find({ type: 'Text', text: /\u001b|\u0007/ })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /feat: \[31mred bell$/ })).toBeDefined()
+  })
+
   test('changed_files_show_line_counts', async ($, on) => {
     await start($, on, { ...repo(), [NUMSTAT]: '40\t12\thooks/register.tsx\n-\t-\timg.png\n' })
 
