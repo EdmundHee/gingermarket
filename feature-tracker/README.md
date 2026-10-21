@@ -18,9 +18,12 @@ Features · syph (vault)             [ Scan ]
   [ Review ] [ Note ]
     ✓ Email login
     ◐ Password reset
-  ▸ Fixes 2  [ all ]
-  ▾ Ideas 1  [ all ]
-     ◉  low  Cache the session lookup  [ ▶ ]
+  ▾ Fixes 3  [ all ]
+    ▾ auth-login 2 · 1 high      [ PR ▶ ]
+        ◉  high  No rate limit on login  [ ▶ ]
+        ○  med   Lockout never resets    [ ▶ ]
+    ▸ postgres 1 · 1 med         [ PR ▶ ]
+  ▸ Ideas 1  [ all ]
   [ Plan 1 selected ]
 ▸ Billing
   2✓ 0◐ 0○ 1✗ · never reviewed
@@ -60,19 +63,27 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    `verify: partly — …` line, and `false` goes under `## Rejected by verifier`, already ticked, with
    the reason. It can re-rate severity. Then the mod writes a new note,
    `reviews/YYYY-MM-DD_<module>-<sha7>.md`, with one `- [ ]` checkbox per finding and
-   `verified: n/m` in its frontmatter. If the check fails, the findings are kept as the reviewer
+   `verified: n/m` in its frontmatter. Each finding also gets an area **tag**, the part of the
+   product its fix is for (`auth-login`, `auth-password`, `postgres`, `database`): lowercase
+   kebab-case, at most 24 characters, sized so one tag's findings make one PR. The reviewer is
+   shown every tag already used in the repo and reuses one when it fits. A finding line reads
+   ``- [ ] high · `auth-login` · server/auth/login.ts:42 — No rate limit → add a limiter``; the tag is
+   in backticks, not `#`, so it never becomes an Obsidian tag. If the check fails, the findings are kept as the reviewer
    wrote them and the toast says `unverified`. Untick a rejected finding to bring it back.
    Files under the module's paths that were uncommitted at review time are recorded as `dirty: N`,
    and the pane shows `dirty`, since the note's sha doesn't hold what the reviewer read.
 3. **Tick a box** in the note when a finding is fixed or not worth fixing. The next review of that
    module reads the last 5 notes. Ticked findings are not repeated, and open ones it finds fixed are
    listed under `## Resolved since last review`. Old notes are never rewritten, so the history stays.
-4. **Expand** a module (▸) to see `Fixes N` and `Ideas N`. Open a group to list its unticked findings.
-   Click findings to select them, or `all` for the whole group, then **Plan N selected**. **▶** plans
-   one finding right away. Either way Claude gets a plan-mode prompt that quotes the chosen note
+4. **Expand** a module (▸) to see `Fixes N` and `Ideas N`. Open a group to see its unticked findings
+   by tag, most urgent first (more `high`, then `med`, then `low`). Each tag row is a suggested PR:
+   **PR ▶** plans all of that tag's findings as one branch and one PR. Open a tag row to list its
+   findings. Click findings to select them, or `all` for the whole group, then **Plan N selected**.
+   **▶** plans one finding right away. Each way Claude gets a plan-mode prompt that quotes the chosen note
    lines and asks it to check each one against the current code first, dropping or lowering any
    that is wrong or overstated. With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
-   the newest review note (`open`, else `xdg-open`, else a toast with its path).
+   the newest review note (`open`, else `xdg-open`, else a toast with its path). Notes written
+   before tags show their findings under `untagged` until the module's next review.
 
 A module shows `stale · N files` once files under its paths have changed since the commit it was last
 reviewed at (`git diff --name-only <sha> -- ':(glob)<path>'`; no model call). A review never edits

@@ -28,6 +28,13 @@ const FINDINGS = JSON.stringify({
   ],
   fixed: [],
 })
+/** An Auth note whose fixes carry area tags: two auth-login (one high), one postgres, one untagged. */
+const TAGGED_NOTE =
+  '---\ntype: review\nmodule: Auth\nsha: abc1234\n---\n# Review — Auth (abc1234)\n\n## Missing handling\n' +
+  '- [ ] med · `postgres` · a/db.ts — no pool → cap pool\n' +
+  '- [ ] low · `auth-login` · a/login.ts:9 — weak message → reword\n' +
+  '- [ ] high · `auth-login` · a/login.ts:42 — no rate limit → add limiter\n' +
+  '- [ ] med · a/misc.ts — loose type → narrow\n'
 /** The verifier's answer with no verdicts: every finding is kept as the reader wrote it. */
 const NO_VERDICTS = '{"verdicts":[]}'
 
@@ -485,6 +492,7 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'toggle:Auth' })
 
     await pane.press({ key: 'group:Auth:fixes' })
+    await pane.press({ key: 'tag:Auth:fixes:untagged' })
 
     const row = await textOf(pane, 'item:Auth:fixes:0')
     expect(row).toContain('○')
@@ -499,6 +507,7 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'toggle:Auth' })
     await pane.press({ key: 'group:Auth:fixes' })
     await pane.press({ key: 'group:Auth:ideas' })
+    await pane.press({ key: 'tag:Auth:ideas:untagged' })
 
     await pane.press({ key: 'item:Auth:ideas:0' })
 
@@ -536,6 +545,7 @@ describe('feature-tracker', () => {
     const pane = await mount($)
     await pane.press({ key: 'toggle:Auth' })
     await pane.press({ key: 'group:Auth:ideas' })
+    await pane.press({ key: 'tag:Auth:ideas:untagged' })
 
     await pane.press({ key: 'go:Auth:ideas:0' })
 
@@ -551,6 +561,7 @@ describe('feature-tracker', () => {
     const pane = await mount($)
     await pane.press({ key: 'toggle:Auth' })
     await pane.press({ key: 'group:Auth:fixes' })
+    await pane.press({ key: 'tag:Auth:fixes:untagged' })
 
     await pane.press({ key: 'item:Auth:fixes:0' })
 
@@ -571,8 +582,10 @@ describe('feature-tracker', () => {
     const pane = await mount($)
     await pane.press({ key: 'toggle:Auth' })
     await pane.press({ key: 'group:Auth:fixes' })
+    await pane.press({ key: 'tag:Auth:fixes:untagged' })
 
     await pane.press({ key: 'group:Auth:ideas' })
+    await pane.press({ key: 'tag:Auth:ideas:untagged' })
 
     expect(await chipOf(pane, 'item:Auth:fixes:0')).toMatchObject({ backgroundColor: 'error', color: 'inverseText' })
     expect(await chipOf(pane, 'item:Auth:ideas:0')).toMatchObject({ backgroundColor: 'suggestion' })
@@ -781,6 +794,7 @@ describe('feature-tracker', () => {
     const pane = await mount($)
     await pane.press({ key: 'toggle:Auth' })
     await pane.press({ key: 'group:Auth:ideas' })
+    await pane.press({ key: 'tag:Auth:ideas:untagged' })
 
     await pane.press({ key: 'go:Auth:ideas:0' })
 
@@ -825,5 +839,96 @@ describe('feature-tracker', () => {
 
     expect(seen.ran.some(a => a.startsWith('git diff'))).toBe(false)
     expect(await textOf(pane, 'meta:Auth')).not.toContain('stale')
+  })
+
+  test('review_prompt_asks_for_reused_tags', async ($, on) => {
+    const inv = `${INV}\n## Billing\npaths: b/**\n- [done] Checkout — stripe\n`
+    const auth = PRIOR.replace('high · a/login.ts:42', 'high · `auth-login` · a/login.ts:42')
+    const billing = '---\ntype: review\nmodule: Billing\nsha: abc1234\n---\n## Missing handling\n- [ ] med · `postgres` · b/db.ts — no pool → cap pool\n'
+    const files = { [`${DOCS}/features.md`]: inv, [PRIOR_PATH]: auth, [`${DOCS}/reviews/2026-10-12_billing-abc1234.md`]: billing }
+    const seen = await start($, on, { files })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+
+    const prompt = seen.spawns[0]?.prompt ?? ''
+    expect(prompt).toContain('"tag":')
+    expect(prompt).toContain('narrow enough that its findings fit one PR')
+    expect(prompt).toMatch(/reuse one when it fits: .*auth-login/)
+    expect(prompt).toMatch(/reuse one when it fits: .*postgres/)
+    expect(prompt).toContain('auth-login · a/login.ts:42 — no rate limit')
+  })
+
+  test('review_note_writes_normalised_tag', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+    const tagged = JSON.parse(FINDINGS)
+    tagged.findings[0].tag = 'Auth Login!'
+    tagged.findings[1].tag = 'a'.repeat(40)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, JSON.stringify(tagged))
+    await finish($, NO_VERDICTS, 'a2')
+
+    const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
+    expect(note).toContain('- [ ] high · `auth-login` · a/x.ts:42 — t → f')
+    expect(note).toContain(`- [ ] med · \`${'a'.repeat(24)}\` · a/y.ts — u → g`)
+    expect(note).toContain('- [ ] low · a/z.ts:1 — v → h')
+  })
+
+  test('fixes_grouped_by_tag_most_urgent_first', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    const keys = (await pane.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('tag:'))
+    expect(keys).toEqual(['tag:Auth:fixes:auth-login', 'tag:Auth:fixes:postgres', 'tag:Auth:fixes:untagged'])
+    expect(await textOf(pane, 'tag:Auth:fixes:auth-login')).toBe('▸ auth-login 2 · 1 high')
+    expect(await pane.find({ key: 'item:Auth:fixes:0' })).toBeUndefined()
+  })
+
+  test('tag_group_lists_its_items', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'tag:Auth:fixes:auth-login' })
+
+    const rows = (await pane.findAll({ type: 'Button' })).filter(b => b.key?.startsWith('item:'))
+    expect(rows).toHaveLength(2)
+    expect(rows.map(r => r.text).join('\n')).toContain('weak message')
+    expect(rows.map(r => r.text).join('\n')).toContain('no rate limit')
+    expect(await pane.find({ text: 'no pool' })).toBeUndefined()
+  })
+
+  test('pr_button_plans_tag_group', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'pr:Auth:fixes:auth-login' })
+
+    expect(await look(pane, 'pr:Auth:fixes:auth-login')).toEqual({ type: 'Button', plain: undefined, variant: undefined })
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toContain('one branch and one PR for area auth-login')
+    expect(seen.submitted[0]).toContain('weak message → reword')
+    expect(seen.submitted[0]).toContain('no rate limit → add limiter')
+    expect(seen.submitted[0]).not.toContain('no pool')
+  })
+
+  test('untagged_note_shows_one_group', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    const keys = (await pane.findAll({ type: 'Button' })).map(b => b.key ?? '').filter(k => k.startsWith('tag:'))
+    expect(keys).toEqual(['tag:Auth:fixes:untagged'])
+    expect(await textOf(pane, 'tag:Auth:fixes:untagged')).toBe('▸ untagged 1 · 1 high')
   })
 })
