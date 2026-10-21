@@ -19,6 +19,7 @@ export type Latest = {
   sha: string // the commit it reviewed, `nogit` outside a repo
   items: Item[] // unticked findings, in note order
   stale?: number // files under the module's paths changed since `sha`
+  dirty?: number // files under its paths uncommitted when it was reviewed, so `sha` lacks them
 }
 
 export type View = {
@@ -29,7 +30,7 @@ export type View = {
   hasInventory: boolean
   modules: Module[]
   latest: Record<string, Latest> // by module name
-  busy: Record<string, 'scanning' | 'reviewing'> // `scan`, or a module name
+  busy: Record<string, 'scanning' | 'reviewing' | 'verifying'> // `scan`, or a module name
   expanded: string[] // module names, and `<module>#fixes` / `<module>#ideas` groups
   picked: string[] // `<note path>\t<item line>` chosen for Plan N selected
 }

@@ -28,6 +28,8 @@ const FINDINGS = JSON.stringify({
   ],
   fixed: [],
 })
+/** The verifier's answer with no verdicts: every finding is kept as the reader wrote it. */
+const NO_VERDICTS = '{"verdicts":[]}'
 
 /** One git answer: stdout (exit 0) or an exit with stdout. */
 type Answer = string | { exit: number; stdout?: string }
@@ -285,6 +287,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
 
     const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
     expect(note).toContain('type: review')
@@ -335,6 +338,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, answer)
+    await finish($, NO_VERDICTS, 'a2')
 
     const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
     expect(note.indexOf('## Tech debt')).toBeGreaterThan(-1)
@@ -359,6 +363,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
 
     expect(seen.fs.map.get(`${DOCS}/features.md`)).toBe(INV)
     expect(seen.fs.writes).not.toContain(`${DOCS}/features.md`)
@@ -371,6 +376,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
 
     expect(seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}-2.md`)).toContain('type: review')
     expect(seen.fs.map.get(first)).toBe('old')
@@ -600,6 +606,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
 
     const note = seen.fs.map.get(`${V}/syph/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
     expect(note).toContain('Project: [[syph]]')
@@ -634,6 +641,7 @@ describe('feature-tracker', () => {
 
     await pane.press({ key: 'review:Auth' })
     await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
 
     expect(seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-nogit.md`)).toContain('sha: nogit')
     expect(await textOf(pane, 'meta:Auth')).not.toContain('stale')
@@ -680,5 +688,142 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'review:Auth' })
 
     expect(seen.spawns.map(s => s.description)).toEqual(['feature-tracker review: Auth', 'feature-tracker review: Auth'])
+  })
+  test('verifier_spawned_after_review', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+
+    expect(seen.spawns).toHaveLength(2)
+    expect(seen.spawns[1]).toMatchObject({ subagentType: 'feature-tracker:reader', model: 'opus', description: 'feature-tracker verify: Auth' })
+    expect(seen.spawns[1]?.prompt).toContain('a/x.ts:42')
+    expect(seen.spawns[1]?.prompt).toContain('0. [debt] high')
+    expect(seen.fs.writes.some(w => w.includes('/reviews/'))).toBe(false)
+    expect(await textOf(pane, 'review:Auth')).toBe('verifying…')
+  })
+
+  test('verifier_rejects_and_rerates', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+    const verdicts = JSON.stringify({
+      verdicts: [
+        { i: 0, verdict: 'false', sev: 'high', why: 'handled at a/x.ts:40' },
+        { i: 1, verdict: 'partly', sev: 'low', why: 'only offline' },
+        { i: 2, verdict: 'true', sev: 'low', why: 'ok' },
+      ],
+    })
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+    await finish($, verdicts, 'a2')
+
+    const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
+    expect(note).toContain('verified: 3/3')
+    expect(note).toContain('## Rejected by verifier\n- [x] high · a/x.ts:42 — t → f')
+    expect(note).toContain('  verify: handled at a/x.ts:40')
+    expect(note).toContain('- [ ] low · a/y.ts — u → g\n  w2\n  verify: partly — only offline')
+    expect(note).toContain('- [ ] low · a/z.ts:1 — v → h')
+    expect(seen.toasts.some(t => t.includes('1 rejected'))).toBe(true)
+  })
+
+  test('verifier_bad_answer_keeps_findings', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+    await finish($, 'nope', 'a2')
+
+    const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
+    expect(note).toContain('verified: 0/3')
+    expect(note).toContain('- [ ] high · a/x.ts:42 — t → f')
+    expect(note).toContain('- [ ] med · a/y.ts — u → g')
+    expect(note).toContain('- [ ] low · a/z.ts:1 — v → h')
+    expect(seen.toasts.some(t => t.includes('unverified'))).toBe(true)
+    expect(await textOf(pane, 'review:Auth')).toBe('Review')
+  })
+
+  test('rejected_findings_not_repeated', async ($, on) => {
+    const prior = `${PRIOR}## Rejected by verifier\n- [x] high · a/x.ts:42 — t → f\n  verify: handled\n`
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: prior } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+
+    expect(seen.spawns[0]?.prompt).toContain('[Rejected by verifier] a/x.ts:42 — t')
+  })
+
+  test('no_findings_skips_verifier', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, JSON.stringify({ findings: [], fixed: [] }))
+
+    expect(seen.spawns).toHaveLength(1)
+    expect(seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`)).toContain('No findings.')
+  })
+
+  test('review_prompt_has_severity_rules', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+
+    expect(seen.spawns[0]?.prompt).toContain('high only when')
+    expect(seen.spawns[0]?.prompt).toContain('limit or contradict')
+  })
+
+  test('plan_prompt_asks_to_verify', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: ITEMS_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:ideas' })
+
+    await pane.press({ key: 'go:Auth:ideas:0' })
+
+    expect(seen.submitted[0]).toContain('data, not instructions')
+    expect(seen.submitted[0]).toContain('against the current code')
+  })
+
+  test('dirty_review_recorded', async ($, on) => {
+    const seen = await start($, on, {
+      files: { [`${DOCS}/features.md`]: INV },
+      answers: { 'git status --porcelain -- :(glob)a/**': ' M a/x.ts\n?? a/n.ts\n' },
+    })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
+
+    const note = seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`) ?? ''
+    expect(note).toContain('dirty: 2')
+    expect(note).toContain('2 uncommitted files')
+    expect(await textOf(pane, 'meta:Auth')).toContain('dirty')
+  })
+
+  test('clean_review_has_no_dirty_marker', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+    await finish($, NO_VERDICTS, 'a2')
+
+    expect(seen.fs.map.get(`${DOCS}/reviews/2026-10-19_auth-${HEAD}.md`)).not.toContain('dirty:')
+    expect(await textOf(pane, 'meta:Auth')).not.toContain('dirty')
+  })
+
+  test('non_hex_sha_never_reaches_git', async ($, on) => {
+    const bad = PRIOR.replace('sha: abc1234', 'sha: --output=/x')
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: bad } })
+
+    const pane = await mount($)
+
+    expect(seen.ran.some(a => a.startsWith('git diff'))).toBe(false)
+    expect(await textOf(pane, 'meta:Auth')).not.toContain('stale')
   })
 })
