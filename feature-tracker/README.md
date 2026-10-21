@@ -86,7 +86,9 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    (Read/Grep/Glob only) reviews that module's paths. A second run of it then checks each finding
    against the code (the button shows `verifying…`): `true` stays, `partly` stays with a
    `verify: partly — …` line, and `false` goes under `## Rejected by verifier`, already ticked, with
-   the reason. It can re-rate severity. Then the mod writes a new note,
+   the reason. It can re-rate severity. The check is also given the decisions you recorded (see
+   **Decisions** below), and a finding that goes against one is `false`, with the decision file as
+   its reason. Then the mod writes a new note,
    `reviews/YYYY-MM-DD_<module>-<sha7>.md`, with one `- [ ]` checkbox per finding and
    `verified: n/m` in its frontmatter. Each finding also gets an area **tag**, the part of the
    product its fix is for (`auth-login`, `auth-password`, `postgres`, `database`): lowercase
@@ -107,10 +109,19 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    **▶** plans one finding right away. Each way Claude gets a plan-mode prompt that quotes the chosen note
    lines and asks it to check each one against the current code first, dropping or lowering any
    that is wrong or overstated. It also asks Claude to tick each finding's box in the note once it is
-   fixed or dropped. The pane re-reads the note after every turn, so a ticked finding leaves its group.
+   fixed or dropped. When you have recorded decisions, the prompt lists their paths and asks Claude
+   to read the ones that bear on the findings first and drop any finding that goes against one.
+   The pane re-reads the note after every turn, so a ticked finding leaves its group.
    With plan-tracker installed, the approved plan's items are tracked as usual. **Note** opens
    the newest review note (`open`, else `xdg-open`, else a toast with its path). Notes written
    before tags show their findings under `untagged` until the module's next review.
+
+### Decisions
+
+A recorded decision is any of these, if it exists: the repo's `CLAUDE.md` files and its committed
+`**/decisions/*.md` and `**/adr/*.md`, plus `<notesDir>/<project>/decisions/*.md` in vault mode.
+Dated notes come newest first by file name and `CLAUDE.md` comes last. The verifier gets their text
+up to 6000 characters, so a large set loses its oldest and a big `CLAUDE.md` is cut first. Having none is fine: both prompts are then the same as before.
 
 A module shows `stale · N files` once files under its paths have changed since the commit it was last
 reviewed at (`git diff --name-only <sha> -- ':(glob)<path>'`; no model call). A review never edits

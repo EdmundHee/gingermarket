@@ -44,6 +44,8 @@ const BILLING_NOTE =
   '- [ ] high · `billing-db` · b/refund.ts — refund race → lock row\n'
 /** The verifier's answer with no verdicts: every finding is kept as the reader wrote it. */
 const NO_VERDICTS = '{"verdicts":[]}'
+/** The argv that lists the repo's recorded decisions. */
+const DECISIONS_LS = 'git ls-files -- :(glob)**/CLAUDE.md :(glob)**/decisions/*.md :(glob)**/adr/*.md'
 
 /** One git answer: stdout (exit 0) or an exit with stdout. */
 type Answer = string | { exit: number; stdout?: string }
@@ -738,6 +740,57 @@ describe('feature-tracker', () => {
     expect(await textOf(pane, 'review:Auth')).toBe('verifying…')
   })
 
+  test('verifier_prompt_has_repo_decisions', async ($, on) => {
+    const decision = `${R}/docs/decisions/2026-10-01_auth.md`
+    const seen = await start($, on, {
+      files: { [`${DOCS}/features.md`]: INV, [decision]: 'No rate limit: gateway does it' },
+      answers: { [DECISIONS_LS]: 'docs/decisions/2026-10-01_auth.md\n' },
+    })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+
+    expect(seen.spawns[1]?.prompt).toContain('goes against one is false')
+    expect(seen.spawns[1]?.prompt).toContain(decision)
+    expect(seen.spawns[1]?.prompt).toContain('gateway does it')
+  })
+
+  test('verifier_prompt_decisions_before_claude_md', async ($, on) => {
+    const seen = await start($, on, {
+      files: { [`${DOCS}/features.md`]: INV, [`${R}/CLAUDE.md`]: 'x'.repeat(7000), [`${R}/docs/decisions/2026-10-01_auth.md`]: 'No rate limit: gateway does it' },
+      answers: { [DECISIONS_LS]: 'CLAUDE.md\ndocs/decisions/2026-10-01_auth.md\n' },
+    })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+
+    expect(seen.spawns[1]?.prompt).toContain('gateway does it')
+  })
+
+  test('verifier_prompt_has_vault_decisions', { options: { notesDir: V } }, async ($, on) => {
+    const seen = await start($, on, {
+      files: { [`${V}/_tools/groups.json`]: GROUPS, [`${V}/syph/features.md`]: INV, [`${V}/syph/decisions/2026-10-02_cache.md`]: 'Cache list kept unbounded' },
+    })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+
+    expect(seen.spawns[1]?.prompt).toContain('Cache list kept unbounded')
+  })
+
+  test('verifier_prompt_no_decisions_line_when_none', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+    await finish($, FINDINGS)
+
+    expect(seen.spawns[1]?.prompt).not.toContain('Decisions the developer recorded')
+  })
+
   test('verifier_rejects_and_rerates', async ($, on) => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
     const pane = await mount($)
@@ -950,6 +1003,29 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'pr:Auth:fixes:auth-login' })
 
     expect(seen.submitted[0]).toContain(`tick its "- [ ]" box in ${PRIOR_PATH}`)
+  })
+
+  test('plan_prompt_lists_decision_records', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE }, answers: { [DECISIONS_LS]: 'CLAUDE.md\n' } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'pr:Auth:fixes:auth-login' })
+
+    expect(seen.submitted[0]).toContain('decision records')
+    expect(seen.submitted[0]).toContain(`${R}/CLAUDE.md`)
+  })
+
+  test('plan_prompt_no_decisions_line_when_none', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($)
+    await pane.press({ key: 'toggle:Auth' })
+    await pane.press({ key: 'group:Auth:fixes' })
+
+    await pane.press({ key: 'pr:Auth:fixes:auth-login' })
+
+    expect(seen.submitted[0]).not.toContain('decision records')
   })
 
   test('ticked_finding_leaves_group_after_main_turn', async ($, on) => {
