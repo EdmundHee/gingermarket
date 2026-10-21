@@ -746,7 +746,7 @@ export const register: Register = (on, options) => {
       const per = Math.max(1, Math.min(n, Math.floor((cols + 1) / (CARD_MIN + 1))))
       const width = Math.floor((cols - (per - 1)) / per)
       return (
-        <Box key="cards" flexDirection="row" flexWrap="wrap" gap={1} alignItems="flex-start">
+        <Box key="cards" flexDirection="row" flexWrap="wrap" columnGap={1} alignItems="flex-start">
           {list.map(c => cardBox(c, width))}
         </Box>
       )

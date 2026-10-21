@@ -1026,6 +1026,9 @@ describe('feature-tracker', () => {
     expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▸ 2 findings')
     expect(card?.props.width).toBe(47)
     expect(card?.props.borderStyle).toBe('round')
+    const grid = await pane.find({ key: 'cards' })
+    expect(grid?.props.columnGap).toBe(1)
+    expect(grid?.props.gap).toBeUndefined() // a row gap leaves a blank line between bordered rows
   })
 
   test('card_width_splits_three_ways', async ($, on) => {
