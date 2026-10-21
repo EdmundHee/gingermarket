@@ -1,6 +1,6 @@
 {
   "name": "plan-tracker",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own.",
   "author": { "name": "Edmund Hee" },
   "license": "MIT",

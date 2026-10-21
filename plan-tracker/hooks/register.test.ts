@@ -88,6 +88,7 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
     return next(e)
   })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('classic.SessionStart', () => ({}))
   on('tool.register', (_$, e) => ({ value: { tool: `mcp__plan-tracker__${e.name}` } }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.messages', () => ({ value: messages as never }))
@@ -785,7 +786,7 @@ describe('plan-tracker', () => {
 
     expect(ran).toMatchObject({ text: 'Plan tracker wiped.' })
     expect(seen.state?.plans).toEqual([])
-    expect(seen.store.get(KEY)).toEqual({ nextId: 1, plans: [] })
+    expect(seen.store.get(KEY)).toEqual({ nextId: 2, plans: [] })
   })
 
   test('reset_declined_keeps_tracker', async ($, on) => {
@@ -796,6 +797,27 @@ describe('plan-tracker', () => {
 
     expect(ran).toMatchObject({ text: 'Kept.' })
     expect(seen.state?.plans[0]?.items[0]?.status).toBe('open')
+  })
+
+  test('clear_reloads_tracker', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'open']]))
+    const stored = seeded([[1, 'verified'], [2, 'open']])
+    seen.store.set(KEY, stored)
+
+    await $.classic.SessionStart({ source: 'clear' })
+
+    expect(seen.state).toEqual(stored)
+  })
+
+  test('clear_frees_queued_item', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'open']]))
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'work:1' })
+
+    await $.classic.SessionStart({ source: 'clear' })
+    await pane.press({ key: 'work:1' })
+
+    expect(seen.submitted).toHaveLength(2)
   })
 
   test('remove_button_drops_group', async ($, on) => {

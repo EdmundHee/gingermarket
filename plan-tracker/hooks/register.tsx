@@ -227,6 +227,19 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
   $.ui.toast(`sent ${ids}`)
 }
 
+/** A session's start, or a /clear (no session.start, $.state back to EMPTY): turn state reset, store loaded. */
+async function load($: EngineInterface) {
+  planTurn = false
+  activePlan = undefined
+  prompt = ''
+  lastDoc = undefined
+  queued.clear() // ponytail: a prompt pulled back with Up keeps its ids queued until then; no event frees them sooner
+  const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
+  await update($, tracker, () => stored)
+  $.ui.status(status(stored))
+  void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
+}
+
 /**
  * Audits every non-verified item in one opus call, reading the tool calls and (when given) Claude's final reply;
  * never un-verifies. `quiet` toasts only when something new is verified. Returns what opus said, or undefined.
@@ -281,13 +294,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
     storeKey = `tracker:${cwd}`
-    planTurn = false
-    activePlan = undefined
-    prompt = ''
-    lastDoc = undefined
-    const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
-    await update($, tracker, () => stored)
-    $.ui.status(status(stored))
+    await load($)
     await $.tool.register({
       name: 'mark_done',
       description:
@@ -303,7 +310,12 @@ export const register: Register = on => {
       },
     })
     await $.command.register({ name: 'plan-tracker', description: 'Open the plan tracker pane', argumentHint: '[reset]' })
-    void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
+    return next(e)
+  })
+
+  // /clear starts a new session id with no session.start; unloaded, the next save would write EMPTY over the store
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') await load($)
     return next(e)
   })
 
@@ -447,7 +459,7 @@ export const register: Register = on => {
     if (e.args.trim() === 'reset') {
       const answer = await $.ui.ask('Wipe the plan tracker for this project?', ['Wipe', 'Keep']).catch(() => 'Keep')
       if (answer !== 'Wipe') return { text: 'Kept.' }
-      await save($, () => EMPTY)
+      await save($, t => ({ ...EMPTY, nextId: t.nextId })) // old ids stay in the transcript; new items never reuse them
       return { text: 'Plan tracker wiped.' }
     }
     const opened = await $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })

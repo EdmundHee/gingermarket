@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · 012cc3a+wip (feat/feature-tracker-0-4-1-layout-sticks) · validate ✔ · feature-tracker 73/73 · plan-tracker 53/53 · git-tracker 17/17
+last run: 2026-10-21 · 4c5e845+wip (fix/plan-tracker-clear-reload) · validate ✔ · feature-tracker 73/73 · plan-tracker 55/55 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -92,7 +92,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-097 | feature-tracker not a repo | unit | `git rev-parse --show-toplevel` exit 128; cwd `/r` | 1. press `review:Auth` 2. reader turn completes 3. verifier `a2` answers `{"verdicts":[]}` 4. mount Pane | note `…_auth-nogit.md` with `sha: nogit`; no `stale` in meta | feature-tracker/hooks/register.test.ts > non_git_repo_reviews_without_staleness | pass |
 | TC-098 | feature-tracker reader hand-back dropped | unit | reader spawned and listed as `a1` (type `feature-tracker:reader`) | 1. `$.prompt.submit` peer message `<agent-message from="a1">` `[Subagent hand-back] {…}` | `{ drop }`: the main loop never gets the reader's report, so no model turn starts | feature-tracker/hooks/register.test.ts > reader_handback_never_reaches_main_loop | pass |
 | TC-099 | feature-tracker other peer messages pass | unit | agent `b1` of type `Explore` listed | 1. `$.prompt.submit` peer message `<agent-message from="b1">` | prompt enters unchanged (text returned, no drop) | feature-tracker/hooks/register.test.ts > other_agent_messages_pass_through | pass |
-| TC-100 | plan-tracker reset wipes | unit | #1 open; `ui.ask` answers `Wipe` | 1. run command `plan-tracker` args `reset` | reply `Plan tracker wiped.`; state has no plans; store holds the empty tracker | plan-tracker/hooks/register.test.ts > reset_confirmed_wipes_tracker | pass |
+| TC-100 | plan-tracker reset wipes | unit | #1 open; `ui.ask` answers `Wipe` | 1. run command `plan-tracker` args `reset` | reply `Plan tracker wiped.`; state has no plans; store holds `{ nextId: 2, plans: [] }` (ids keep counting) | plan-tracker/hooks/register.test.ts > reset_confirmed_wipes_tracker | pass |
 | TC-101 | plan-tracker reset kept | unit | #1 open; `ui.ask` answers `Keep` | 1. run command `plan-tracker` args `reset` | reply `Kept.`; #1 still `open` | plan-tracker/hooks/register.test.ts > reset_declined_keeps_tracker | pass |
 | TC-102 | plan-tracker remove group | unit | group `p1` with #1 open | 1. mount Pane 2. press `remove:p1` | state has no plans; store written | plan-tracker/hooks/register.test.ts > remove_button_drops_group | pass |
 | TC-103 | plan-tracker extract again | unit | group `p1`, 0 items + note, file `/tmp/seeded.md`; fs.read answers PLAN; opus answers `["a","b"]` | 1. mount Pane 2. press `extract-again` | `p1` has 2 `open` items, no note; nextId +2 | plan-tracker/hooks/register.test.ts > extract_again_fills_failed_group | pass |
@@ -149,6 +149,8 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-164 | feature-tracker /clear keeps layout | unit | as TC-156; empty store | 1. press `layout:2` 2. `classic.SessionStart` source `clear` 3. mount | `card:` Boxes drawn; that `ui.open` asks columns 96 | feature-tracker/hooks/register.test.ts > clear_keeps_layout | pass |
 | TC-165 | feature-tracker bad stored layout | unit | INV; store `layout` = `"wide"` | 1. start 2. mount | `layout:1` primary; `toggle:Auth` drawn | feature-tracker/hooks/register.test.ts > bad_stored_layout_falls_back_to_list | pass |
 | TC-166 | feature-tracker card shows note date | unit | as TC-156; Billing note dated 2026-10-15 | 1. press `layout:2` | `card:Auth:fixes:auth-login` text has `2026-10-12`; `card:Billing:fixes:billing-db` text has `2026-10-15` | feature-tracker/hooks/register.test.ts > card_shows_its_note_date | pass |
+| TC-167 | plan-tracker /clear reloads tracker | unit | store holds seeded #1 open; after start, store replaced by #1 verified, #2 open | 1. `$.classic.SessionStart` source `clear` | state equals the replaced store tracker | plan-tracker/hooks/register.test.ts > clear_reloads_tracker | pass |
+| TC-168 | plan-tracker /clear frees queued item | unit | seeded #1 open | 1. mount Pane 2. press `work:1` 3. `$.classic.SessionStart` source `clear` 4. press `work:1` | two prompts submitted | plan-tracker/hooks/register.test.ts > clear_frees_queued_item | pass |
 
 ## Rules
 

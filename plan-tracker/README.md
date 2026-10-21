@@ -38,7 +38,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - `Verify all` re-audits every non-verified item in one opus call. Never un-verifies.
 - `x` on a group removes it. `extract again` re-reads the plan file when extraction failed.
 - `/plan-tracker` opens the pane (needed below 144 columns, where an unasked pane waits);
-  `/plan-tracker reset` wipes the tracker for this project.
+  `/plan-tracker reset` wipes the tracker for this project; ids keep counting, so an old `#id` never
+  names a new item. `/clear` keeps the tracker: it reloads from the project store.
 - Status line: `plan 2/7`.
 - At the end of every turn in which Claude edited a file or ran a command, the tracker audits the
   open items itself (one opus call): `✓` marks land without Claude calling `mark_done`. The audit
@@ -54,7 +55,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - Every third file edit, command or subagent dispatch while items are open adds one reminder line to the tool result,
   which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
   restarts the count, so marks land as the work does, not at the end of the turn.
-- `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer.
+- `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer; its items
+  stay `already queued` until `/clear` or a new session.
 
 A second approval adds a new group on top; approving the same plan text again (say, re-shown after
 `/compact`) keeps its group and ids. A fully verified group collapses to one line. There is no
