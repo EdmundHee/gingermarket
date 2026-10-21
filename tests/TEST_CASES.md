@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · 2d41b90+wip (feat/feature-tracker-0-4-0-pr-cards) · validate ✔ · feature-tracker 68/68 · plan-tracker 53/53 · git-tracker 17/17
+last run: 2026-10-21 · 012cc3a+wip (feat/feature-tracker-0-4-1-layout-sticks) · validate ✔ · feature-tracker 72/72 · plan-tracker 53/53 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -144,6 +144,10 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-159 | feature-tracker card triggers work | unit | as TC-156 | 1. press `layout:2` 2. press `pr:Billing:fixes:billing-db` 3. press `fold:Auth:fixes:auth-login`, `go:Auth:fixes:auth-login:0` | 1st prompt has `one branch and one PR for area billing-db` and the Billing note path; 2nd prompt has one auth-login line, the high `no rate limit` (card rows high first), and no `one PR` | feature-tracker/hooks/register.test.ts > card_buttons_submit_plan_prompts | pass |
 | TC-160 | feature-tracker no cards | unit | INV, no review notes | 1. press `layout:2` | `nocards` text has `No open findings`; `scan` drawn | feature-tracker/hooks/register.test.ts > grid_without_findings_says_so | pass |
 | TC-161 | feature-tracker narrow pane fewer cards | unit | as TC-156; bodyColumns 48 | 1. press `layout:3` | `card:Auth:fixes:auth-login` width 48 (one per row) | feature-tracker/hooks/register.test.ts > narrow_pane_wraps_cards | pass |
+| TC-162 | feature-tracker layout saved | unit | INV + TAGGED_NOTE; empty store | 1. start, mount 2. press `layout:3` | store `layout` = 3 | feature-tracker/hooks/register.test.ts > layout_choice_is_stored | pass |
+| TC-163 | feature-tracker layout back next session | unit | as TC-156; store `layout` = 2 | 1. start 2. mount at bodyColumns 96 | session.start `ui.open` asks columns 96; `layout:2` primary; `card:Billing:fixes:billing-db` drawn, no `toggle:Auth` | feature-tracker/hooks/register.test.ts > stored_layout_returns_next_session | pass |
+| TC-164 | feature-tracker /clear keeps layout | unit | as TC-156; empty store | 1. press `layout:2` 2. `classic.SessionStart` source `clear` 3. mount | `card:` Boxes drawn; that `ui.open` asks columns 96 | feature-tracker/hooks/register.test.ts > clear_keeps_layout | pass |
+| TC-165 | feature-tracker bad stored layout | unit | INV; store `layout` = `"wide"` | 1. start 2. mount | `layout:1` primary; `toggle:Auth` drawn | feature-tracker/hooks/register.test.ts > bad_stored_layout_falls_back_to_list | pass |
 
 ## Rules
 

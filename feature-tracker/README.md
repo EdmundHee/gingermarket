@@ -52,7 +52,7 @@ dragged wins, and a pane too narrow for 24-column cards draws fewer per row.
 
 A card's findings are listed high first. **PR ▶** and **▶** send the same plan prompts as the list
 does. Opening a card opens that tag row in the list too. Picking findings, **Review**, **Note** and
-the `stale` badge are in the list only. The layout goes back to the list in a new session.
+the `stale` badge are in the list only. The layout you pick is kept for the next session and after `/clear`.
 
 ## Install
 

@@ -84,10 +84,16 @@ function fakeFs(on: On, files: Record<string, string>, dirs: string[]) {
   return { map, writes }
 }
 
-type Setup = { files?: Record<string, string>; dirs?: string[]; answers?: Record<string, Answer>; agents?: Array<{ id: string; type: string }> }
+type Setup = {
+  files?: Record<string, string>
+  dirs?: string[]
+  answers?: Record<string, Answer>
+  agents?: Array<{ id: string; type: string }>
+  store?: Record<string, unknown> // the plugin's $.store before the session starts
+}
 
 /** Starts the session with every op the plugin reaches answered beneath it; hooks go in before the first `$` call. */
-async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, agents = [] }: Setup = {}) {
+async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, agents = [], store = {} }: Setup = {}) {
   const seen = {
     ran: git(on, { 'git rev-parse --show-toplevel': `${R}\n`, 'git rev-parse --short=7 HEAD': `${HEAD}\n`, ...answers }),
     fs: fakeFs(on, files, dirs),
@@ -97,6 +103,7 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     submitted: [] as string[],
     opened: [] as string[],
     widths: [] as Array<number | undefined>, // each ui.open's columns
+    store: new Map(Object.entries(store)),
     order: [] as string[], // session.start beneath the plugin (Plan, Git) vs its ui.open
   }
   // The kit hands this hook the Agent tool's own parameters (snake_case) and drops any agentId a hook
@@ -133,6 +140,11 @@ async function start($: Engine, on: On, { files = {}, dirs = [], answers = {}, a
     return { value: undefined }
   })
   on('clock.now', () => ({ value: NOON }))
+  on('store.get', (_$, e) => ({ value: seen.store.get(e.key) }))
+  on('store.set', (_$, e) => {
+    seen.store.set(e.key, e.value)
+    return { value: undefined }
+  })
   on('prompt.submit', (_$, e) => {
     seen.submitted.push(e.text)
     return { text: e.text }
@@ -1075,5 +1087,48 @@ describe('feature-tracker', () => {
     await pane.press({ key: 'layout:3' })
 
     expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.props.width).toBe(48)
+  })
+
+  test('layout_choice_is_stored', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:3' })
+
+    expect(seen.store.get('layout')).toBe(3)
+  })
+
+  test('stored_layout_returns_next_session', async ($, on) => {
+    const seen = await start($, on, {
+      files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE },
+      store: { layout: 2 },
+    })
+
+    const pane = await mount($, 96)
+
+    expect(seen.widths).toEqual([96])
+    expect((await pane.find({ key: 'layout:2' }))?.props.variant).toBe('primary')
+    expect(await pane.find({ key: 'card:Billing:fixes:billing-db' })).toBeDefined()
+    expect(await pane.find({ key: 'toggle:Auth' })).toBeUndefined()
+  })
+
+  test('clear_keeps_layout', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+    await pane.press({ key: 'layout:2' })
+
+    await $.classic.SessionStart({ source: 'clear' })
+
+    expect((await pane.findAll({ type: 'Box' })).some(b => b.key?.startsWith('card:'))).toBe(true)
+    expect(seen.widths.at(-1)).toBe(96)
+  })
+
+  test('bad_stored_layout_falls_back_to_list', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV }, store: { layout: 'wide' } })
+
+    const pane = await mount($)
+
+    expect((await pane.find({ key: 'layout:1' }))?.props.variant).toBe('primary')
+    expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
   })
 })

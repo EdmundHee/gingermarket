@@ -372,12 +372,14 @@ async function load($: EngineInterface) {
   }))
 }
 
-/** A new session's pane: no reader waiting, `view` back to EMPTY, the inventory read again. */
+/** A new session's pane: no reader waiting, `view` back to EMPTY but for the stored layout, the inventory read again. */
 async function reset($: EngineInterface) {
   busyNow.clear()
   pending.clear()
   readers.clear()
-  await update($, view, () => EMPTY)
+  const saved = await $.store.get('layout').catch(() => undefined)
+  const layout = ([1, 2, 3] as const).find(n => n === saved) ?? 1
+  await update($, view, () => ({ ...EMPTY, layout }))
   await load($)
 }
 
@@ -696,6 +698,7 @@ export const register: Register = (on, options) => {
     const setLayout = async (layout: View['layout']) => {
       await update($, view, s => ({ ...s, layout }))
       await openPane($)
+      await $.store.set('layout', layout).catch(err => $.ui.log(`feature-tracker: layout not saved: ${String(err)}`, { to: 'debug' }))
     }
     const chip = (sev: string) => <Text backgroundColor={SEV_COLOR[sev]} color="inverseText">{` ${sev.padEnd(4)} `}</Text>
 
