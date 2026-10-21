@@ -35,7 +35,7 @@ export type View = {
   busy: Record<string, 'scanning' | 'reviewing' | 'verifying'> // `scan`, or a module name
   expanded: string[] // module names, `<module>#fixes` / `<module>#ideas` groups, and `<module>#<group>#<tag>` tag rows
   picked: string[] // `<note path>\t<item line>` chosen for Plan N selected
-  layout: 1 | 2 | 3 // 1: the module list; 2, 3: PR cards per row
+  layout: 1 | 2 // 1: the module list; 2: PR cards
 }
 
 declare module 'claude-code' {

@@ -13,6 +13,11 @@ const STATUSES: readonly Status[] = ['done', 'partial', 'planned', 'broken']
 const GLYPH: Record<Status, string> = { done: '✓', partial: '◐', planned: '○', broken: '✗' }
 const COLOR: Record<Status, string> = { done: 'success', partial: 'warning', planned: 'inactive', broken: 'error' }
 const SEV_COLOR: Record<string, string> = { high: 'error', med: 'warning', low: 'suggestion' }
+// ponytail: a fixed gradient per badge, one background per letter; a mix() helper if badges ever vary
+const BADGE = {
+  fixes: [' fix ', ['#d7263d', '#e5432f', '#f46036', '#f57a2a', '#f7931e']],
+  ideas: [' idea ', ['#7b2ff7', '#6a3ff6', '#5a4ff5', '#3a6ff4', '#2d82f4', '#2196f3']],
+} as const
 const GROUPS = [['fixes', 'Fixes', 'warning'], ['ideas', 'Ideas', 'merged']] as const
 const BUCKETS = [
   ['missing', 'Missing feature'],
@@ -329,10 +334,10 @@ function byTag(list: Item[]) {
 /** One PR: a tag of a module's Fixes or Ideas, its findings high first. */
 type Card = { module: string; group: Item['group']; tag: string; file: string; date: string; items: Item[] }
 
-/** Every module's PRs as cards, most urgent first; ties keep module, then Fixes before Ideas, then tag order. */
+/** Every module's PRs as cards: all Fixes, then all Ideas, each most urgent first; ties keep module, then tag order. */
 function cards(v: View): Card[] {
   const bySev = (a: Item, b: Item) => SEVS.findIndex(s => s === a.sev) - SEVS.findIndex(s => s === b.sev)
-  return v.modules
+  const all = v.modules
     .flatMap(m => {
       const last = v.latest[m.name]
       if (last === undefined) return []
@@ -341,7 +346,7 @@ function cards(v: View): Card[] {
         return byTag(list).map(tag => ({ module: m.name, group: g, tag, file: last.file, date: last.date, items: list.filter(it => it.tag === tag).sort(bySev) }))
       })
     })
-    .sort(byUrgency(c => c.items))
+  return GROUPS.flatMap(([g]) => all.filter(c => c.group === g).sort(byUrgency(c => c.items))) // an idea never outranks a fix
 }
 
 async function staleOf($: EngineInterface, sha: string, paths: string[]) {
@@ -378,7 +383,7 @@ async function reset($: EngineInterface) {
   pending.clear()
   readers.clear()
   const saved = await $.store.get('layout').catch(() => undefined)
-  const layout = ([1, 2, 3] as const).find(n => n === saved) ?? 1
+  const layout = saved === 2 || saved === 3 ? 2 : 1 // ponytail: 3 col is gone; a stored 3 opens PR cards
   await update($, view, () => ({ ...EMPTY, layout }))
   await load($)
 }
@@ -598,7 +603,7 @@ async function planItems($: EngineInterface, module: string, file: string, items
   toast($, `sent ${items.length} finding${one ? '' : 's'} for ${module}`)
 }
 
-/** Opens or re-seats the pane, asking a dock as wide as its layout: 48 for the list, 96 or 144 for cards. */
+/** Opens or re-seats the pane, asking a dock as wide as its layout: 48 for the list, 96 for cards. */
 async function openPane($: EngineInterface) {
   const { layout } = await read($, view)
   return $.ui.open({ id: PANE, title: TITLE, columns: layout * DOCK_COLUMNS })
@@ -701,6 +706,10 @@ export const register: Register = (on, options) => {
       await $.store.set('layout', layout).catch(err => $.ui.log(`feature-tracker: layout not saved: ${String(err)}`, { to: 'debug' }))
     }
     const chip = (sev: string) => <Text backgroundColor={SEV_COLOR[sev]} color="inverseText">{` ${sev.padEnd(4)} `}</Text>
+    const badge = (g: Item['group']) => {
+      const [word, bg] = BADGE[g]
+      return [...word].map((ch, i) => <Text backgroundColor={bg[i]} color="#ffffff" bold>{ch}</Text>)
+    }
 
     // ponytail: a card has no pick, Review or stale badge; the list keeps them
     const cardBox = (c: Card, width: number) => {
@@ -708,7 +717,6 @@ export const register: Register = (on, options) => {
       const fold = `${c.module}#${c.group}#${c.tag}` // the list's tag-row key: open in one layout, open in the other
       const isOpen = v.expanded.includes(fold)
       const sevs = SEVS.filter(s => c.items.some(it => it.sev === s))
-      const label = GROUPS.find(([g]) => g === c.group)?.[1]
       // marginTop -1: this card's top border is drawn over the bottom border of the card above, so rows share a line
       return (
         <Box key={`card:${id}`} flexDirection="column" width={width} borderStyle="round" borderColor={SEV_COLOR[sevs[0] ?? 'low']} paddingX={1} marginTop={-1}>
@@ -716,9 +724,9 @@ export const register: Register = (on, options) => {
             <Box flexGrow={1} flexShrink={1}>
               <Text bold wrap="truncate">{c.tag}</Text>
             </Box>
-            <Text dimColor>{c.date}</Text>
+            <Box key={`kind:${id}`}>{badge(c.group)}</Box>
           </Box>
-          <Text dimColor wrap="truncate">{`${c.module} · ${label}`}</Text>
+          <Text dimColor wrap="truncate">{`${c.module} · ${c.date}`}</Text>
           {!isOpen && (
             // ponytail: the worst finding's title stands for the PR; an opus summary per tag needs every module re-reviewed
             <Box key={`sum:${id}`}>
@@ -875,9 +883,9 @@ export const register: Register = (on, options) => {
           </Button>
         </Box>
         <Box key="layout" flexDirection="row" gap={1}>
-          {([1, 2, 3] as const).map(n => (
+          {([1, 2] as const).map(n => (
             <Button key={`layout:${n}`} variant={v.layout === n ? 'primary' : undefined} dimColor={v.layout !== n} onPress={() => setLayout(n)}>
-              {n === 1 ? 'List' : `${n} col`}
+              {n === 1 ? 'List' : 'PR cards'}
             </Button>
           ))}
         </Box>

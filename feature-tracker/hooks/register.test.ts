@@ -983,8 +983,8 @@ describe('feature-tracker', () => {
 
     expect(await textOf(pane, 'layout:1')).toBe('List')
     expect((await pane.find({ key: 'layout:1' }))?.props.variant).toBe('primary')
-    expect(await textOf(pane, 'layout:2')).toBe('2 col')
-    expect(await textOf(pane, 'layout:3')).toBe('3 col')
+    expect(await textOf(pane, 'layout:2')).toBe('PR cards')
+    expect(await pane.find({ key: 'layout:3' })).toBeUndefined()
     expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
     expect((await pane.findAll({ type: 'Box' })).some(b => b.key?.startsWith('card:'))).toBe(false)
   })
@@ -995,10 +995,9 @@ describe('feature-tracker', () => {
     const before = seen.widths.length
 
     await pane.press({ key: 'layout:2' })
-    await pane.press({ key: 'layout:3' })
     await pane.press({ key: 'layout:1' })
 
-    expect(seen.widths.slice(before)).toEqual([96, 144, 48])
+    expect(seen.widths.slice(before)).toEqual([96, 48])
     expect(await pane.find({ key: 'toggle:Auth' })).toBeDefined()
   })
 
@@ -1021,7 +1020,11 @@ describe('feature-tracker', () => {
 
     const card = await pane.find({ key: 'card:Auth:fixes:auth-login' })
     expect(card?.text).toContain('auth-login')
-    expect(card?.text).toContain('Auth · Fixes')
+    expect(card?.text).toContain('Auth · 2026-10-12')
+    expect(await textOf(pane, 'kind:Auth:fixes:auth-login')).toBe(' fix ')
+    const letters = (await pane.find({ key: 'kind:Auth:fixes:auth-login' }))?.children.filter(c => typeof c === 'object') as { props: Record<string, unknown> }[]
+    expect(letters.at(0)?.props.backgroundColor).toBe('#d7263d')
+    expect(letters.at(-1)?.props.backgroundColor).toBe('#f7931e') // a gradient, red to orange
     expect(card?.text).toContain('1 high · 1 low')
     expect(await textOf(pane, 'fold:Auth:fixes:auth-login')).toBe('▸ 2 findings')
     expect(card?.props.width).toBe(47)
@@ -1033,13 +1036,31 @@ describe('feature-tracker', () => {
     expect(card?.props.marginTop).toBe(-1) // drawn over the bottom border of the card above
   })
 
-  test('card_width_splits_three_ways', async ($, on) => {
-    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
-    const pane = await mount($, 144)
+  test('stored_three_opens_pr_cards', async ($, on) => {
+    const seen = await start($, on, {
+      files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE },
+      store: { layout: 3 }, // saved by 0.4.x's 3 col
+    })
 
-    await pane.press({ key: 'layout:3' })
+    const pane = await mount($, 96)
 
-    expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.props.width).toBe(47)
+    expect(seen.widths).toEqual([96])
+    expect((await pane.find({ key: 'layout:2' }))?.props.variant).toBe('primary')
+    expect(await pane.find({ key: 'card:Billing:fixes:billing-db' })).toBeDefined()
+  })
+
+  test('idea_cards_after_fixes', async ($, on) => {
+    const note = `${TAGGED_NOTE}\n## Improvement\n- [ ] high · \`pane-ux\` · a/ui.ts — no count → add a badge\n`
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: note, [BILLING_PATH]: BILLING_NOTE } })
+    const pane = await mount($, 96)
+
+    await pane.press({ key: 'layout:2' })
+
+    const keys = (await pane.findAll({ type: 'Box' })).map(b => b.key ?? '').filter(k => k.startsWith('card:'))
+    expect(keys).toEqual(['card:Billing:fixes:billing-db', 'card:Auth:fixes:auth-login', 'card:Auth:fixes:postgres', 'card:Auth:fixes:untagged', 'card:Auth:ideas:pane-ux']) // high, yet after every fix
+    expect(await textOf(pane, 'kind:Auth:ideas:pane-ux')).toBe(' idea ')
+    expect((await chipOf(pane, 'kind:Auth:ideas:pane-ux'))?.backgroundColor).toBe('#7b2ff7')
+    expect(await pane.find({ key: 'pr:Auth:ideas:pane-ux' })).toBeDefined()
   })
 
   test('card_expands_to_its_findings', async ($, on) => {
@@ -1115,7 +1136,7 @@ describe('feature-tracker', () => {
     await start($, on, { files: { [`${DOCS}/features.md`]: INV_BILLING, [PRIOR_PATH]: TAGGED_NOTE, [BILLING_PATH]: BILLING_NOTE } })
     const pane = await mount($, 48)
 
-    await pane.press({ key: 'layout:3' })
+    await pane.press({ key: 'layout:2' })
 
     expect((await pane.find({ key: 'card:Auth:fixes:auth-login' }))?.props.width).toBe(48)
   })
@@ -1124,9 +1145,9 @@ describe('feature-tracker', () => {
     const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV, [PRIOR_PATH]: TAGGED_NOTE } })
     const pane = await mount($, 96)
 
-    await pane.press({ key: 'layout:3' })
+    await pane.press({ key: 'layout:2' })
 
-    expect(seen.store.get('layout')).toBe(3)
+    expect(seen.store.get('layout')).toBe(2)
   })
 
   test('stored_layout_returns_next_session', async ($, on) => {
