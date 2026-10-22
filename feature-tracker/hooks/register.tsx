@@ -131,16 +131,22 @@ async function registered($: EngineInterface, dir: string, repo: string) {
   }
 }
 
-/** Repo root from git, then the notes root: `<notesDir>/<project>` when that folder exists, else `<repo>/docs/features`. */
+/**
+ * Repo root from git, then the notes root: `<notesDir>/<project>` when that folder exists, else `<main>/docs/features`.
+ * A worktree reviews its own code but keeps the main checkout's notes: groups.json lists that path, and docs/ may be untracked.
+ */
 async function resolve($: EngineInterface, cwd: string, notesDir: string): Promise<Ctx> {
   ctx = { ...ctx, repo: '' }
   const top = await run($, ['git', 'rev-parse', '--show-toplevel'])
   const repo = top.ok ? top.out.trim() : cwd
-  const base = repo.split('/').filter(Boolean).pop() ?? repo
-  const local: Ctx = { repo, isGit: top.ok, root: `${repo}/docs/features`, mode: 'repo', project: base, group: '', stack: [] }
+  const common = top.ok ? (await run($, ['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'])).out.trim() : ''
+  // ponytail: `<main>/.git` only; a bare repo's or a submodule's common dir keeps the worktree's own root
+  const main = common.endsWith('/.git') ? common.slice(0, -'/.git'.length) : repo
+  const base = main.split('/').filter(Boolean).pop() ?? main
+  const local: Ctx = { repo, isGit: top.ok, root: `${main}/docs/features`, mode: 'repo', project: base, group: '', stack: [] }
   if (notesDir.trim() === '') return local
   const dir = (await home($, notesDir.trim())).replace(/\/+$/, '')
-  const entry = await registered($, dir, repo)
+  const entry = await registered($, dir, main)
   const project = entry?.name ?? base
   if (!(await $.fs.exists(`${dir}/${project}`).catch(() => false))) {
     return { ...local, hint: `No folder ${dir}/${project}, so notes go to docs/features.` }
