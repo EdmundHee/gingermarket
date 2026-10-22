@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-21 · befebf4+wip (feat/feature-tracker-pr-cards) · validate ✔ · feature-tracker 76/76 · plan-tracker 55/55 · git-tracker 17/17
+last run: 2026-10-22 · f424114+wip (fix/feature-tracker-worktree-notes) · validate ✔ · feature-tracker 85/85 · plan-tracker 55/55 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -71,6 +71,9 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-074 | feature-tracker vault via groups.json | unit | notesDir `/v`; `/v/_tools/groups.json` maps `/r` → `syph`; `/v/syph` exists | 1. start 2. mount Pane | root `/v/syph`; header `Features · syph (vault)` | feature-tracker/hooks/register.test.ts > vault_mode_resolves_project_from_groups | pass |
 | TC-075 | feature-tracker vault basename | unit | notesDir `/v`; no groups.json; `/v/r` exists | 1. start 2. mount Pane | root `/v/r`; header `(vault)` | feature-tracker/hooks/register.test.ts > vault_mode_falls_back_to_basename | pass |
 | TC-076 | feature-tracker vault folder missing | unit | notesDir `/v`; `/v/r` absent | 1. start 2. mount Pane | repo mode; hint line names `/v/r` | feature-tracker/hooks/register.test.ts > missing_vault_folder_falls_back_with_hint | pass |
+| TC-179 | feature-tracker worktree vault | unit | notesDir `/v`; toplevel `W`; common dir `/r/.git`; groups.json maps `/r` → `syph`; `/v/syph/features.md` | 1. start 2. mount Pane | header `Features · syph (vault)`; module Auth listed | feature-tracker/hooks/register.test.ts > worktree_vault_mode_uses_main_checkout | pass |
+| TC-180 | feature-tracker worktree repo mode | unit | notesDir unset; toplevel `W`; common dir `/r/.git`; `/r/docs/features/features.md` | 1. start 2. mount Pane | header `Features · r (repo)`; module Auth listed | feature-tracker/hooks/register.test.ts > worktree_repo_mode_reads_main_docs | pass |
+| TC-181 | feature-tracker worktree reviews worktree code | unit | as TC-180 | 1. start 2. mount 3. press `review:Auth` | reader prompt says `repository at W` | feature-tracker/hooks/register.test.ts > worktree_review_reads_worktree_code | pass |
 | TC-077 | feature-tracker parse inventory | unit | features.md: module Auth (paths `a/**`, 4 features one per status) + 1 free line; module Billing | 1. start 2. mount Pane | `module:Auth` row; meta `1✓ 1◐ 1○ 1✗`; free line not drawn; `module:Billing` row; feature rows show the name only (`Login`, no ` — email`) | feature-tracker/hooks/register.test.ts > parses_modules_paths_and_statuses | pass |
 | TC-078 | feature-tracker empty state | unit | no features.md | 1. start 2. mount Pane | `scan` button + `No features.md yet` text; no `module:` rows | feature-tracker/hooks/register.test.ts > no_inventory_shows_scan_cta | pass |
 | TC-079 | feature-tracker scan creates | unit | vault mode; no features.md; reader answers 2 modules, Login with `desc` | 1. press `scan` 2. reader turn completes | features.md written: frontmatter `type: doc`, `Project: [[syph]]`, `## Auth`, `paths: a/**`, `- [done] Login` (desc dropped) | feature-tracker/hooks/register.test.ts > scan_writes_new_inventory | pass |

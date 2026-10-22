@@ -139,6 +139,9 @@ lists the repo under `projects.<name>.repo`, `<name>` is used instead, and the n
 that entry's `group` and `stack`. If the folder doesn't exist, the pane says so and keeps using
 `docs/features/`. In vault mode notes carry `Project: [[<project>]]` for Obsidian's graph.
 
+From a git worktree, the project and `docs/features/` are those of the main checkout, so every
+worktree shares one inventory. Reviews still read the worktree's own code.
+
 ## Cost
 
 Each Scan is one opus subagent run that reads code with tools. A Review with findings is two (review,
