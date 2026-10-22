@@ -4,6 +4,9 @@ import type { On } from 'claude-code'
 
 const R = '/r' // repo toplevel
 const V = '/v' // notesDir
+const W = '/r/.claude/worktrees/w' // a worktree of R
+/** git's answers inside W: its own toplevel, R's `.git` as the common dir. */
+const IN_W = { 'git rev-parse --show-toplevel': `${W}\n`, 'git rev-parse --path-format=absolute --git-common-dir': `${R}/.git\n` }
 const DOCS = `${R}/docs/features`
 const HEAD = 'f9d904b'
 const NOON = new Date(2026, 9, 19, 12).getTime() // 2026-10-19 local, whatever the test machine's zone
@@ -223,6 +226,33 @@ describe('feature-tracker', () => {
     expect(await textOf(pane, 'head')).toContain('(repo)')
     expect(await textOf(pane, 'hint')).toContain(`${V}/r`)
     expect(await pane.find({ key: 'module:Auth' })).toBeDefined()
+  })
+
+  test('worktree_vault_mode_uses_main_checkout', { options: { notesDir: V } }, async ($, on) => {
+    await start($, on, { files: { [`${V}/_tools/groups.json`]: GROUPS, [`${V}/syph/features.md`]: INV }, answers: IN_W })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'head')).toContain('Features · syph (vault)')
+    expect(await pane.find({ key: 'module:Auth' })).toBeDefined()
+  })
+
+  test('worktree_repo_mode_reads_main_docs', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: INV }, answers: IN_W })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'head')).toContain('Features · r (repo)')
+    expect(await pane.find({ key: 'module:Auth' })).toBeDefined()
+  })
+
+  test('worktree_review_reads_worktree_code', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV }, answers: IN_W })
+    const pane = await mount($)
+
+    await pane.press({ key: 'review:Auth' })
+
+    expect(seen.spawns[0]?.prompt).toContain(`repository at ${W}`)
   })
 
   test('parses_modules_paths_and_statuses', async ($, on) => {
