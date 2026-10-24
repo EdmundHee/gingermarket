@@ -4,7 +4,7 @@
     "name": "Edmund Hee"
   },
   "metadata": {
-    "description": "Claude Code plugins by Edmund Hee: plan, git and feature panes beside the chat, and a plan-aware orchestrator for ralph-loop."
+    "description": "Claude Code plugins by Edmund Hee: plan, git and feature panes beside the chat, and a plan-aware orchestrator for ralph-loop, and raven, an AI PM/CTO loop over Codex and Claude."
   },
   "plugins": [
     {
@@ -26,6 +26,14 @@
       "name": "feature-tracker",
       "source": "./feature-tracker",
       "description": "Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security, improvements), each finding checked by a second opus pass, logged as checkbox notes in Obsidian or docs/features/, with each finding listed in the pane to pick and plan."
+    },
+    {
+      "name": "raven",
+      "source": {
+        "source": "github",
+        "repo": "EdmundHee/raven"
+      },
+      "description": "AI PM/CTO loop: drop feature ideas, Codex drafts GitHub issues, Claude codes approved ones in a worktree, Codex reviews and ranks PRs and writes a lesson per fix; every agent call's tokens and Codex quota logged."
     }
   ]
 }
