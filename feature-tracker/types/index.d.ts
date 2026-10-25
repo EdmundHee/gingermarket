@@ -30,6 +30,7 @@ export type View = {
   root: string // the folder holding features.md and reviews/
   hint?: string
   hasInventory: boolean
+  scan?: { at: string; newFiles?: number } // features.md's `Last scan:` (`''` when it has none); added files no module holds
   modules: Module[]
   latest: Record<string, Latest> // by module name
   busy: Record<string, 'scanning' | 'reviewing' | 'verifying'> // `scan`, or a module name
