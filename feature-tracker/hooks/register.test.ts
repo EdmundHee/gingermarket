@@ -49,6 +49,12 @@ const BILLING_NOTE =
 const NO_VERDICTS = '{"verdicts":[]}'
 /** The argv that lists the repo's recorded decisions. */
 const DECISIONS_LS = 'git ls-files -- :(glob)**/CLAUDE.md :(glob)**/decisions/*.md :(glob)**/adr/*.md'
+/** A stamp an earlier scan wrote, at commit abc1234. */
+const OLD_STAMP = 'Last scan: 2026-10-01 09:00 · abc1234'
+/** The argv that lists files added since that scan outside INV's one module. */
+const NEW_FILES = 'git diff --name-only --diff-filter=A abc1234 -- . :(exclude,glob)**/*.md :(exclude,glob)a/**'
+/** The reader's scan answer that holds only what INV already has. */
+const SAME_AUTH = JSON.stringify({ modules: [{ name: 'Auth', paths: ['a/**'], features: [{ name: 'Login', status: 'done' }] }] })
 
 /** One git answer: stdout (exit 0) or an exit with stdout. */
 type Answer = string | { exit: number; stdout?: string }
@@ -325,7 +331,8 @@ describe('feature-tracker', () => {
     await finish($, answer)
 
     expect(seen.fs.map.get(`${DOCS}/features.md`)).toBe(
-      '## Auth\npaths: a/**\n- [done] Login — my words\nnote to self\n- [planned] Reset (new)\n\n## Billing (new)\npaths: b/**\n',
+      `Last scan: 2026-10-19 12:00 · ${HEAD}\n\n` +
+        '## Auth\npaths: a/**\n- [done] Login — my words\nnote to self\n- [planned] Reset (new)\n\n## Billing (new)\npaths: b/**\n',
     )
   })
 
@@ -339,6 +346,52 @@ describe('feature-tracker', () => {
     expect(seen.fs.map.get(`${DOCS}/features.md`)).toBe(INV)
     expect(seen.toasts.some(t => t.includes('scan'))).toBe(true)
     expect(await textOf(pane, 'scan')).toBe('Scan')
+  })
+
+  test('scan_stamps_new_inventory', { options: { notesDir: V } }, async ($, on) => {
+    const seen = await start($, on, { files: { [`${V}/_tools/groups.json`]: GROUPS }, dirs: [`${V}/syph`] })
+    const pane = await mount($)
+
+    await pane.press({ key: 'scan' })
+    await finish($, SAME_AUTH)
+
+    expect(seen.fs.map.get(`${V}/syph/features.md`)).toContain(`Last scan: 2026-10-19 12:00 · ${HEAD}\n\n## Auth`)
+  })
+
+  test('rescan_replaces_stamp_keeps_lines', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: `${OLD_STAMP}\n\n${INV}` } })
+    const pane = await mount($)
+
+    await pane.press({ key: 'scan' })
+    await finish($, SAME_AUTH)
+
+    expect(seen.fs.map.get(`${DOCS}/features.md`)).toBe(`Last scan: 2026-10-19 12:00 · ${HEAD}\n\n${INV}`)
+    expect(seen.toasts).toContain('feature-tracker: scan found nothing new')
+  })
+
+  test('pane_shows_last_scan', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: `${OLD_STAMP}\n\n${INV}` } })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'lastscan')).toBe('Last scan 2026-10-01 09:00')
+  })
+
+  test('pane_recommends_scan_on_new_files', async ($, on) => {
+    await start($, on, { files: { [`${DOCS}/features.md`]: `${OLD_STAMP}\n\n${INV}` }, answers: { [NEW_FILES]: 'c/new.ts\nc/two.ts\n' } })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'lastscan')).toContain('2 new files → Scan')
+  })
+
+  test('pane_unstamped_inventory_no_diff', async ($, on) => {
+    const seen = await start($, on, { files: { [`${DOCS}/features.md`]: INV } })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'lastscan')).toBe('Last scan not recorded')
+    expect(seen.ran.some(argv => argv.includes('--diff-filter=A'))).toBe(false)
   })
 
   test('review_writes_note_with_checkboxes', async ($, on) => {
