@@ -14,6 +14,7 @@ modules and the features inside each one. It also runs an opus review per module
 ```
 Features · syph (vault)             [ Scan ]
 [ List ] [ PR cards ]
+Last scan 2026-10-25 14:02 · 3 new files → Scan
 ▾ Auth
   3✓ 1◐ 1○ 0✗ · 2 open · 1 idea · stale · 3 files
   [ Review ] [ Note ]
@@ -82,6 +83,12 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>`, th
    Any other line is kept and ignored. A later Scan only **appends**: new features go at the end of
    their module with ` (new)`, new modules go at the end of the file. It never rewrites or removes a
    line of yours.
+   Each Scan also sets one line of its own, `Last scan: 2026-10-25 14:02 · a3d704e` (local time and
+   commit), above the first module. Scan rewrites only that line, and it does so even when it finds
+   nothing new. The pane shows it under the header. Once files have been added since that commit
+   outside every module's `paths:` (Markdown doesn't count), it adds `N new files → Scan`. That's
+   the hint a new area exists. An inventory without the line shows `Last scan not recorded` until
+   the next Scan.
 2. **Review** on a module (or `/feature-tracker review <module>`). A read-only opus subagent
    (Read/Grep/Glob only) reviews that module's paths. A second run of it then checks each finding
    against the code (the button shows `verifying…`): `true` stays, `partly` stays with a
@@ -145,7 +152,7 @@ worktree shares one inventory. Reviews still read the worktree's own code.
 ## Cost
 
 Each Scan is one opus subagent run that reads code with tools. A Review with findings is two (review,
-then verify); one with none is one. Cost grows with the module's size. Nothing runs on its own. Staleness and the pane use only git and file reads.
+then verify); one with none is one. Cost grows with the module's size. Nothing runs on its own. Staleness, the new-files hint and the pane use only git and file reads.
 
 The engine also hands each reader's report to your main session as a message, which would start a
 Claude turn over it. The mod already has the report, so it drops that message. You'll see

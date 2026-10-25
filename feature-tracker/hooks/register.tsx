@@ -58,6 +58,7 @@ const SEVERITY =
 const FINDING = /^- \[([ xX])\] (high|med|low) · (?:`([a-z0-9-]+)` · )?(.+?) — (.+?) → /
 const FEATURE = /^- \[(planned|partial|done|broken)\] (.+?)(?: — (.*))?$/
 const NEW = / \(new\)$/
+const STAMP = /^Last scan: (\d{4}-\d{2}-\d{2} \d{2}:\d{2}) · (\S+)$/m // the one features.md line the mod owns
 const EMPTY: View = { project: '', mode: 'repo', root: '', hasInventory: false, modules: [], latest: {}, busy: {}, expanded: [], picked: [], layout: 1 }
 const view = atom({ plugin: 'feature-tracker', key: 'view' } as const, EMPTY)
 
@@ -103,10 +104,22 @@ function json(text: string): unknown {
   }
 }
 
+const pad = (n: number) => String(n).padStart(2, '0')
+
 async function today($: EngineInterface) {
   const d = new Date(await $.clock.now())
-  const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+/** Local `YYYY-MM-DD HH:MM`, for the scan stamp. */
+async function stamp($: EngineInterface) {
+  const d = new Date(await $.clock.now())
+  return `${await today($)} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** HEAD's short sha, `nogit` outside a repo. */
+async function head($: EngineInterface) {
+  return ctx.isGit ? (await run($, ['git', 'rev-parse', '--short=7', 'HEAD'])).out.trim() || 'nogit' : 'nogit'
 }
 
 // ---- where things live ----
@@ -239,6 +252,16 @@ function merge(text: string, found: Module[]) {
   }
   for (const [at, add] of inserts.sort((a, b) => b[0] - a[0])) out.splice(at + 1, 0, ...add)
   return [...out, ...tail].join('\n') + '\n'
+}
+
+/** `text` with its `Last scan:` line set to `line`: replaced, else put above the first module, else at the end. */
+function stamped(text: string, line: string) {
+  if (STAMP.test(text)) return text.replace(STAMP, line)
+  const out = text.replace(/\n+$/, '').split('\n')
+  const at = out.findIndex(l => l.startsWith('## '))
+  if (at < 0) return [...out, '', line].join('\n') + '\n'
+  out.splice(at, 0, line, '')
+  return out.join('\n') + '\n'
 }
 
 function asModules(v: unknown): Module[] | undefined {
@@ -387,9 +410,20 @@ async function staleOf($: EngineInterface, sha: string, paths: string[]) {
   return r.ok ? lines(r.out).length : undefined
 }
 
+/** Files added since the scan at `sha` that no module's paths hold: the sign a new area wants a Scan. */
+// ponytail: `*.md` is the one noise filter; exclude tests or lockfiles too if they keep asking for a Scan
+async function newFilesOf($: EngineInterface, sha: string, modules: Module[]) {
+  if (!ctx.isGit || !SHA.test(sha)) return undefined
+  const mine = modules.flatMap(m => m.paths).map(p => `:(exclude,glob)${p}`)
+  const r = await run($, ['git', 'diff', '--name-only', '--diff-filter=A', sha, '--', '.', ':(exclude,glob)**/*.md', ...mine])
+  return r.ok ? lines(r.out).length : undefined
+}
+
 async function load($: EngineInterface) {
   const text = await $.fs.read(`${ctx.root}/features.md`).then(String).catch(() => undefined)
   const modules = text === undefined ? [] : parse(text)
+  const [, at = '', sha = ''] = (text !== undefined && STAMP.exec(text)) || []
+  const scan = text === undefined ? undefined : { at, newFiles: await newFilesOf($, sha, modules) }
   const latest: Record<string, Latest> = {}
   await Promise.all(modules.map(async m => {
     const [top] = await notesOf($, m.name)
@@ -404,7 +438,7 @@ async function load($: EngineInterface) {
     latest[m.name] = { file: top.path, date: top.date, sha, items, stale: await staleOf($, sha, m.paths), dirty }
   }))
   await update($, view, v => ({
-    ...v, project: ctx.project, mode: ctx.mode, root: ctx.root, hint: ctx.hint, hasInventory: text !== undefined, modules, latest,
+    ...v, project: ctx.project, mode: ctx.mode, root: ctx.root, hint: ctx.hint, hasInventory: text !== undefined, modules, latest, scan,
   }))
 }
 
@@ -492,12 +526,8 @@ async function afterScan($: EngineInterface, path: string, v: unknown) {
   }
   const old = await $.fs.read(path).then(String).catch(() => undefined)
   const next = old === undefined ? fresh(found, await today($)) : merge(old, found)
-  if (next === old) {
-    toast($, 'scan found nothing new')
-    return
-  }
-  await $.fs.write(path, next)
-  toast($, `scan wrote ${path}`)
+  await $.fs.write(path, stamped(next, `Last scan: ${await stamp($)} · ${await head($)}`)) // a scan that found nothing still dates the inventory
+  toast($, next === old ? 'scan found nothing new' : `scan wrote ${path}`)
 }
 
 /** True when the findings went on to the verifier, whose answer writes the note. */
@@ -584,7 +614,7 @@ async function scan($: EngineInterface) {
 
 async function review($: EngineInterface, m: Module) {
   if (busyNow.has(m.name)) return false
-  const sha = ctx.isGit ? (await run($, ['git', 'rev-parse', '--short=7', 'HEAD'])).out.trim() || 'nogit' : 'nogit'
+  const sha = await head($)
   // ponytail: counts dirty files, keeps no snapshot; a dirty review's stale count overstates
   const dirty = ctx.isGit && m.paths.length > 0 ? lines((await run($, ['git', 'status', '--porcelain', '--', ...globs(m.paths)])).out).length : 0
   const texts = await Promise.all((await notesOf($, m.name)).slice(0, PRIORS).map(n => $.fs.read(n.path).then(String).catch(() => '')))
@@ -931,6 +961,14 @@ export const register: Register = (on, options) => {
         {v.hint !== undefined && (
           <Box key="hint">
             <Text color="warning">{v.hint}</Text>
+          </Box>
+        )}
+        {v.scan !== undefined && (
+          <Box key="lastscan">
+            <Text wrap="truncate">
+              <Text dimColor>{v.scan.at ? `Last scan ${v.scan.at}` : 'Last scan not recorded'}</Text>
+              {v.scan.newFiles ? <Text color="warning">{` · ${v.scan.newFiles} new file${v.scan.newFiles === 1 ? '' : 's'} → Scan`}</Text> : null}
+            </Text>
           </Box>
         )}
         {!v.hasInventory && <Text dimColor>No features.md yet. Scan drafts one from the code; edit it by hand after.</Text>}
