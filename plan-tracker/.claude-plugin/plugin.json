@@ -1,7 +1,7 @@
 {
   "name": "plan-tracker",
-  "version": "0.4.2",
-  "description": "Plan tracker pane: items of every approved plan, Claude marks them done, opus verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own.",
+  "version": "0.4.5",
+  "description": "Plan tracker pane: items of every approved plan, Claude marks them done, sonnet audits the marks at every turn end, leftovers of a plan turn are sent back to Claude on their own.",
   "author": { "name": "Edmund Hee" },
   "license": "MIT",
   "types": "./types/index.d.ts"

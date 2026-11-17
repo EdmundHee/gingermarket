@@ -7,7 +7,7 @@ import type { PlanItem, Tracker } from '../types'
 const USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
 const PLAN = '# Fix the thing\n\n## Context\nwhy\n\n## Change\n1. edit a\n2. test b\n'
 const MARK = 'mcp__plan-tracker__mark_done'
-const AUDIT_SYS = 'You audit which' // the turn-end / Verify-all system prompt; mark_done's starts "You audit whether"
+const AUDIT_SYS = 'You audit which' // the turn-end / Verify-all system prompt
 const PANE = {
   title: 'Plan', isFocused: false, bodyColumns: 80, placement: 'dock' as const,
   scroll: { offset: 0, bodyRows: 30 }, view: {},
@@ -162,29 +162,67 @@ describe('plan-tracker', () => {
     expect(calls.n).toBe(0)
   })
 
-  test('mark_done verified by opus', async ($, on) => {
-    opus(on, () => '{"verdict":"verified","reason":"Edit on a.ts seen"}')
+  test('mark_done records the claim without a model call', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'x']]))
     const seen = await start($, on, seeded([[1, 'open']]))
 
     const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
 
+    expect(calls.n).toBe(0)
     // a registered tool's result is a string or content blocks; the engine refuses an object
     expect(typeof ran.result).toBe('string')
-    expect(ran.result).toContain('verified')
+    expect(ran.result).toContain('#1')
+    const item = seen.state?.plans[0]?.items[0]
+    expect(item?.status).toBe('claimed')
+    expect(item?.claim).toBe('edited a.ts')
+  })
+
+  test('turn end verifies a claimed item', async ($, on) => {
+    const prompts: string[] = []
+    on('model.complete', (_$, e) => {
+      prompts.push(e.prompt)
+      return { value: { isAnswered: true as const, text: audit([[1, 'verified', 'Edit on a.ts seen']], 'done'), usage: USAGE } }
+    })
+    const seen = await start($, on, seeded([[1, 'open']]))
+
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'edited a.ts' })
+    await endTurn($)
+
+    expect(prompts).toHaveLength(1)
+    expect(prompts[0]).toContain('developer claims done: edited a.ts')
     expect(seen.state?.plans[0]?.items[0]?.status).toBe('verified')
   })
 
-  test('mark_done unverified becomes claimed', async ($, on) => {
-    opus(on, () => '{"verdict":"unverified","reason":"no edit on a.ts"}')
+  test('turn end leaves an unproven claim claimed', async ($, on) => {
+    opus(on, () => audit([[1, 'unverified', 'no edit on a.ts']], 'done'))
     const seen = await start($, on, seeded([[1, 'open']]))
 
-    const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'done' })
+    await $.tool.call({ tool: MARK, id: 1, evidence: 'done' })
+    await endTurn($)
 
-    expect(typeof ran.result).toBe('string')
-    expect(ran.result).toContain('no edit on a.ts')
     const item = seen.state?.plans[0]?.items[0]
     expect(item?.status).toBe('claimed')
     expect(item?.note).toBe('no edit on a.ts')
+  })
+
+  test('mark_done on a verified item changes nothing', async ($, on) => {
+    const seen = await start($, on, seeded([[1, 'verified', { note: 'by you' }]]))
+
+    const ran = await $.tool.call({ tool: MARK, id: 1, evidence: 'again' })
+
+    expect(ran.result).toContain('already verified')
+    expect(seen.state?.plans[0]?.items[0]).toEqual({ id: 1, text: 'item 1', status: 'verified', note: 'by you' })
+  })
+
+  test('compose shows a fresh claim as audit pending', async ($, on) => {
+    await start($, on, seeded([[1, 'claimed', { claim: 'edited a.ts' }]]))
+
+    const { sections } = await $.prompt.compose({
+      model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'],
+      tools: ['Read', MARK], outputStyle: null, traits: [],
+    })
+
+    expect(sections.find(s => s.id === 'plan-tracker:open')?.text ?? '').toContain('#1 [claimed, audit pending] item 1')
   })
 
   test('mark_done on an unknown id answers a string, no opus', async ($, on) => {
@@ -398,6 +436,19 @@ describe('plan-tracker', () => {
     expect(items.map(i => [i.status, i.nudges ?? 0])).toEqual([['verified', 0], ['open', 1], ['open', 1]])
   })
 
+  test('subagent turn start keeps the plan turn nudge', async ($, on) => {
+    opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'no test'], [3, 'unverified', 'untouched']], 'partial', 'said #3 is next'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open'], [3, 'open']]))
+
+    await startTurn($)
+    await $.turn.start({ text: 'Explore the parser', turnId: 't3', agentId: 'sub' })
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toMatch(/^Work on plan items #2 #3:/)
+  })
+
   test('blocked reply notes the group and sends nothing', async ($, on) => {
     opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'blocked', 'asked which DB'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
@@ -456,11 +507,7 @@ describe('plan-tracker', () => {
   })
 
   test('mark_done turn nudges the rest', async ($, on) => {
-    opus(on, e =>
-      e.system?.startsWith(AUDIT_SYS)
-        ? audit([[2, 'unverified', 'untouched']], 'done', 'says all done')
-        : '{"verdict":"verified","reason":"Edit seen"}',
-    )
+    opus(on, () => audit([[1, 'verified', 'Edit seen'], [2, 'unverified', 'untouched']], 'done', 'says all done'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
 
     await startTurn($, 'do the plan')
@@ -532,13 +579,11 @@ describe('plan-tracker', () => {
     expect(await pane.find({ type: 'Text', text: /waiting on you: which DB/ })).toBeDefined()
   })
 
-  test('every call asks opus', async ($, on) => {
+  test('extraction asks opus, checks ask sonnet', async ($, on) => {
     const models: string[] = []
     on('model.complete', (_$, e) => {
       models.push(e.model)
-      const text = e.system?.startsWith('You extract') ? '["edit a"]'
-        : e.system?.startsWith(AUDIT_SYS) ? audit([[1, 'unverified', 'x']], 'done')
-        : '{"verdict":"unverified","reason":"x"}'
+      const text = e.system?.startsWith('You extract') ? '["edit a"]' : audit([[1, 'unverified', 'x']], 'done')
       return { value: { isAnswered: true as const, text, usage: USAGE } }
     })
     approved(on)
@@ -549,19 +594,20 @@ describe('plan-tracker', () => {
     const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
     await pane.press({ key: 'verify-all' })
 
-    expect(models).toEqual(['opus', 'opus', 'opus'])
+    expect(models).toEqual(['opus', 'sonnet'])
   })
   test('verifier sees the head and tail of a long tool output', async ($, on) => {
     const prompts: string[] = []
     on('model.complete', (_$, e) => {
       prompts.push(e.prompt)
-      return { value: { isAnswered: true as const, text: '{"verdict":"verified","reason":"x"}', usage: USAGE } }
+      return { value: { isAnswered: true as const, text: audit([[1, 'verified', 'x']], 'done'), usage: USAGE } }
     })
     const out = `HEAD-MARK ${'(pass) a test\n'.repeat(200)}(fail) TAIL-MARK Received: ["haiku"]`
     const transcript = [{ role: 'assistant', text: '', toolUses: [{ tool_use_id: 'u1', tool: 'Bash', input: { command: 'test' }, text: out }] }]
     await start($, on, seeded([[1, 'open']]), transcript)
 
-    await $.tool.call({ tool: MARK, id: 1, evidence: 'ran the tests' })
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'verify-all' })
 
     expect(prompts[0]).toContain('HEAD-MARK')
     expect(prompts[0]).toContain('TAIL-MARK Received: ["haiku"]')
@@ -600,7 +646,6 @@ describe('plan-tracker', () => {
   })
 
   test('mark_done restarts the reminder count', async ($, on) => {
-    opus(on, () => '{"verdict":"verified","reason":"edit shown"}')
     await start($, on, seeded([[1, 'open'], [2, 'open']]))
 
     const before = [await edit($), await edit($)]
@@ -687,6 +732,18 @@ describe('plan-tracker', () => {
     expect(group?.title).toBe('add x with a test')
     expect(group?.items.map(i => i.text)).toEqual(['add x', 'test x'])
     expect(group?.file).toBe('')
+  })
+
+  test('subagent turn start keeps the typed prompt', async ($, on) => {
+    const calls = opus(on, () => '["add x","test x"]')
+    const seen = await start($, on)
+
+    await startTurn($, 'add x with a test')
+    await $.turn.start({ text: 'Explore the repo', turnId: 't3', agentId: 'sub' })
+    await repoEdit($)
+
+    expect(calls.n).toBe(1)
+    expect(seen.state?.plans.map(p => p.title)).toEqual(['add x with a test'])
   })
 
   test('edits outside the repo or in docs/superpowers track no prompt', async ($, on) => {

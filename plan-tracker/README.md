@@ -1,9 +1,9 @@
 # plan-tracker
 
 A Claude Code mod. Whatever task is running becomes a group of items in a **Plan** pane beside the
-transcript: a superpowers plan doc, a plan approved in plan mode, or a task you typed. Claude marks an item with `mark_done`, opus checks the claim
-against the recent tool calls, and the pane shows `○` open, `⚠` claimed but unverified (with the
-verifier's reason), `✓` verified. The open items are also listed in Claude's system prompt every
+transcript: a superpowers plan doc, a plan approved in plan mode, or a task you typed. Claude marks an item with `mark_done`, which
+returns at once; when the turn ends sonnet checks every claim against the recent tool calls. The pane shows `○` open,
+`⚠` claimed (waiting for the audit, or refused by it, with the reason), `✓` verified. The open items are also listed in Claude's system prompt every
 turn, so the plan is never out of sight.
 
 ## Install
@@ -35,15 +35,16 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - A group from a file shows its path (relative to the project) under the title.
 - `▶` on an item sends Claude to work on it (a new turn, with the item and the plan file named).
 - `✓` on an item marks it verified by hand, for when the verifier is wrong.
-- `Verify all` re-audits every non-verified item in one opus call. Never un-verifies.
+- `Verify all` re-audits every non-verified item in one sonnet call. Never un-verifies.
 - `x` on a group removes it. `extract again` re-reads the plan file when extraction failed.
 - `/plan-tracker` opens the pane (needed below 144 columns, where an unasked pane waits);
   `/plan-tracker reset` wipes the tracker for this project; ids keep counting, so an old `#id` never
   names a new item. `/clear` keeps the tracker: it reloads from the project store.
 - Status line: `plan 2/7`.
 - At the end of every turn in which Claude edited a file or ran a command, the tracker audits the
-  open items itself (one opus call): `✓` marks land without Claude calling `mark_done`. The audit
-  reads Claude's final reply too, not only the tool calls.
+  open items itself (one sonnet call): it checks each `mark_done` claim, and `✓` marks land even where Claude
+  called no `mark_done`. The audit reads Claude's final reply too, not only the tool calls. A turn you stop with
+  Esc is not audited: its claims stay `⚠` until the next audited turn or `Verify all`.
 - When a **plan turn** ends with items unverified, the tracker sends them back on its own. A plan
   turn is the turn a group was added in (any source), a turn started by `▶` or an earlier nudge, or a
   turn in which Claude called `mark_done`. Claude's reply decides what happens:
@@ -64,9 +65,9 @@ cap on items: a list taller than the pane scrolls (arrows or wheel while the pan
 
 ## Cost
 
-One opus call (60 s timeout) per plan-mode approval, per typed task (on its first repo edit, which waits for
-it), per `mark_done`, per `Verify all`, per turn that touched files while items are open, and per plan turn
-(even one that only talked). A plan doc with `### Task` headings costs nothing to extract. Nothing on a
+One opus call (60 s timeout) per plan-mode approval and per typed task (on its first repo edit, which waits for
+it). One sonnet call (60 s timeout) per `Verify all`, per turn that touched files while items are
+open, and per plan turn (even one that only talked). `mark_done` costs no model call. A plan doc with `### Task` headings costs nothing to extract. Nothing on a
 read-only typed turn. The mid-turn reminder costs no model call.
 
 ## Where things are kept
