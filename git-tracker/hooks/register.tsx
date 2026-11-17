@@ -24,22 +24,37 @@ async function run($: EngineInterface, ...argv: string[]) {
   return { ok: r.exitCode === 0, out: r.stdout }
 }
 
+const PARALLEL = 8 // rev-lists at once when counts must be taken again
+
+type Parent = { name: string; isLocal: boolean; ahead: number; behind: number; isTrunk: boolean }
+// ponytail: one slot, keyed by branch, HEAD and every ref tip; a fetch moving one tip recounts every ref.
+// for-each-ref %(ahead-behind:HEAD) counts all refs in one process once git < 2.41 need not work.
+let lastParent: { key: string; parent: Parent | undefined } | undefined
+
 /** The branch HEAD was most likely cut from: fewest commits of HEAD's that it lacks. */
 async function parentOf($: EngineInterface, branch: string) {
   if (TRUNKS.includes(branch)) return undefined
-  const refs = lines((await run($, 'git', 'for-each-ref', '--format=%(refname)', 'refs/heads', 'refs/remotes')).out)
+  const tips = (await run($, 'git', 'for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads', 'refs/remotes')).out
+  const key = `${branch}\n${(await run($, 'git', 'rev-parse', 'HEAD')).out}${tips}`
+  if (lastParent?.key === key) return lastParent.parent // counts depend only on HEAD and the tips
+  const refs = lines(tips)
+    .map(line => line.slice(line.indexOf(' ') + 1))
     .map(ref => ({ name: ref.replace(/^refs\/(heads|remotes)\//, ''), isLocal: ref.startsWith('refs/heads/') }))
     .filter(r => r.name !== branch && !r.name.endsWith('/HEAD') && !(!r.isLocal && r.name.endsWith(`/${branch}`)))
-  // ponytail: one rev-list per ref; cache per branch if a repo has hundreds of refs
-  const counted = await Promise.all(refs.map(async r => {
-    const { ok, out } = await run($, 'git', 'rev-list', '--left-right', '--count', `HEAD...${r.name}`)
-    const [ahead = 0, behind = 0] = out.trim().split(/\s+/).map(Number)
-    const base = r.isLocal ? r.name : r.name.slice(r.name.indexOf('/') + 1)
-    return ok ? [{ ...r, ahead, behind, isTrunk: TRUNKS.includes(base) }] : []
-  }))
-  return counted.flat().sort((a, b) =>
+  let counted: Parent[][] = []
+  for (let i = 0; i < refs.length; i += PARALLEL) {
+    counted = counted.concat(await Promise.all(refs.slice(i, i + PARALLEL).map(async r => {
+      const { ok, out } = await run($, 'git', 'rev-list', '--left-right', '--count', `HEAD...${r.name}`)
+      const [ahead = 0, behind = 0] = out.trim().split(/\s+/).map(Number)
+      const base = r.isLocal ? r.name : r.name.slice(r.name.indexOf('/') + 1)
+      return ok ? [{ ...r, ahead, behind, isTrunk: TRUNKS.includes(base) }] : []
+    })))
+  }
+  const parent = counted.flat().sort((a, b) =>
     a.ahead - b.ahead || Number(b.isTrunk) - Number(a.isTrunk) || Number(b.isLocal) - Number(a.isLocal) || a.behind - b.behind,
   )[0]
+  lastParent = { key, parent }
+  return parent
 }
 
 const counts = (numstat: string) => {
@@ -137,7 +152,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Open the Git pane: parent branch graph, changed and new files, PR link' })
     void $.ui.open({ id: PANE, title: 'Git', columns: DOCK_COLUMNS })
-    await refresh($, true)
+    void refresh($, true) // the first prompt never waits on git or gh; the pane reads 'Reading git…' meanwhile
     return next(e)
   })
 
@@ -149,7 +164,7 @@ export const register: Register = on => {
 
   on('tool.call', async ($, e, next) => {
     const ran = await next(e)
-    if (WATCH.has(e.tool)) await refresh($, e.tool === 'Bash' && PR_CHANGE.test(e.command))
+    if (WATCH.has(e.tool)) void refresh($, e.tool === 'Bash' && PR_CHANGE.test(e.command)) // the result never waits on git
     return ran
   })
 

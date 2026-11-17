@@ -39,7 +39,8 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>` the
 - With plan-tracker installed too, the two are tabs: `ctrl+x tab` gives the panes the keyboard and
   switches tabs, `Esc` goes back to the prompt, `ctrl+x x` closes the pane on show.
 - `↻` refreshes by hand. Otherwise the pane refreshes after each `Edit`, `Write`, `MultiEdit`,
-  `NotebookEdit` or `Bash` call and at the end of every turn.
+  `NotebookEdit` or `Bash` call and at the end of every turn. Neither the call's result nor the first
+  prompt waits for it; the pane reads `Reading git…` until the first refresh lands.
 - **Parent branch**: of every local and remote branch (the branch's own upstream left out), the one
   missing the fewest of HEAD's commits; ties go to `main`/`master`/`develop`/`dev`, then local over
   remote, then fewest behind. On one of those trunk names there is no parent: the graph is the last
@@ -53,7 +54,8 @@ Commands only, through `$.process.run` in the session's folder, never a shell:
 
 | When | Commands |
 |---|---|
-| every refresh | `git rev-parse`, `git for-each-ref`, one `git rev-list --left-right --count` per branch, `git merge-base`, `git log --graph`, `git diff --numstat --summary`, `git ls-files --others`, one `git diff --no-index --numstat` per untracked file |
+| every refresh | `git rev-parse` (branch and HEAD), `git for-each-ref`, `git merge-base`, `git log --graph`, `git diff --numstat --summary`, `git ls-files --others`, one `git diff --no-index --numstat` per untracked file |
+| a refresh where HEAD or a branch tip moved since the last count | one `git rev-list --left-right --count` per branch, 8 at a time |
 | session start, turn end, `/git-tracker`, `↻`, and after a Bash `gh pr …` or `git push` | `gh pr view --json number,url,state,isDraft` too |
 
 No `gh`, no PR, or `gh` not signed in: the PR row is left out. No model calls.
