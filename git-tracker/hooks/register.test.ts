@@ -91,7 +91,12 @@ const MOVES = [
   },
   {
     name: 'tip moved', head: 'c0ffee4\n',
-    move: { [REFS]: 'c0ffee4 refs/heads/feat/x\nbbb0009 refs/heads/main\n', [REV_MAIN]: '2\t4\n' }, header: 'feat/x ← main  2↑ 4↓',
+    // same refs, only main's tip sha changes: a key of ref names alone would miss it
+    move: {
+      [REFS]: 'aaa0001 refs/heads/feat/x\nbbb0009 refs/heads/main\nbbb0002 refs/remotes/origin/HEAD\nbbb0002 refs/remotes/origin/main\n',
+      [REV_MAIN]: '2\t4\n',
+    },
+    header: 'feat/x ← main  2↑ 4↓',
   },
 ]
 
@@ -373,22 +378,33 @@ describe('git-tracker', () => {
 
   test('parent_rev_lists_run_8_at_a_time', async ($, on) => {
     const names = Array.from({ length: 20 }, (_, i) => `b${String(i + 1).padStart(2, '0')}`)
-    const gate = held()
-    const seen = setup(on, {
+    const answers: Record<string, Answer> = {
       ...repo(),
       [REFS]: `aaa0001 refs/heads/feat/x\n${names.map(n => `bbb0001 refs/heads/${n}\n`).join('')}`,
-      ...Object.fromEntries(names.map(n => [`git rev-list --left-right --count HEAD...${n}`, gate.answer])),
-    })
-    const revLists = () => seen.ran.filter(argv => argv.startsWith('git rev-list '))
+    }
+    // each round's rev-lists wait on that round's gate; answers are read at call time
+    const [gate1, gate2, gate3] = [held(), held(), held()]
+    const holdOn = (gate: ReturnType<typeof held>) =>
+      Object.assign(answers, Object.fromEntries(names.map(n => [`git rev-list --left-right --count HEAD...${n}`, gate.answer])))
+    const seen = setup(on, answers)
+    const started = () => seen.ran.filter(argv => argv.startsWith('git rev-list ')).length
 
+    holdOn(gate1)
     void $.session.start(SESSION)
     await seen.settle()
-    const inFlight = revLists().length
-    gate.release('1\t0\n')
+    const round1 = started()
+    holdOn(gate2)
+    gate1.release('1\t0\n')
+    await seen.settle()
+    const round2 = started()
+    holdOn(gate3)
+    gate2.release('1\t0\n')
+    await seen.settle()
+    const round3 = started()
+    gate3.release('1\t0\n')
     await seen.settle()
 
-    expect(inFlight).toBe(8)
-    expect(revLists()).toHaveLength(20)
+    expect([round1, round2, round3]).toEqual([8, 16, 20])
   })
 
   test('edit_during_start_refresh_reruns_once', async ($, on) => {
