@@ -15,7 +15,7 @@
     {
       "name": "plan-tracker",
       "source": "./plan-tracker",
-      "description": "Plan tracker pane: items of every approved plan, Claude marks them done, sonnet verifies each mark and audits every turn, leftovers of a plan turn are sent back to Claude on their own."
+      "description": "Plan tracker pane: items of every approved plan, Claude marks them done, sonnet audits the marks at every turn end, leftovers of a plan turn are sent back to Claude on their own."
     },
     {
       "name": "git-tracker",

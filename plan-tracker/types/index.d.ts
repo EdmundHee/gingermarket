@@ -1,6 +1,7 @@
 export type PlanItemStatus = 'open' | 'claimed' | 'verified'
 
-export type PlanItem = { id: number; text: string; status: PlanItemStatus; note?: string; nudges?: number }
+// claim: mark_done's evidence line, read by the audit; note: the audit's reason (or 'by you')
+export type PlanItem = { id: number; text: string; status: PlanItemStatus; claim?: string; note?: string; nudges?: number }
 
 export type PlanGroup = {
   id: string

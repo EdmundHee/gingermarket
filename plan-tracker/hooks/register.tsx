@@ -37,10 +37,6 @@ const EXTRACT =
   "You extract a checklist from an implementation plan or a developer's task request. Return ONLY a JSON array of " +
   'strings: each one concrete deliverable or verification step a developer ticks off, in order, at most 120 ' +
   'characters each. Skip context, background and rejected alternatives. Return [] when it asks for no new change.'
-const VERIFY =
-  "You audit whether a plan item was completed, from the developer's claim and the recent tool calls (file edits, " +
-  'commands, outputs). Reply ONLY with JSON {"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}. ' +
-  '"verified" only when the tool calls show the work; a claim alone is not evidence.'
 const AUDIT =
   'You audit which plan items were completed, from the recent tool calls (file edits, commands, outputs) and the ' +
   "developer's final reply. Reply ONLY with JSON " +
@@ -70,6 +66,8 @@ async function ask($: EngineInterface, model: 'opus' | 'sonnet', system: string,
 }
 
 const openItems = (t: Tracker) => t.plans.flatMap(p => p.items.filter(i => i.status !== 'verified'))
+/** Marked this turn, not yet audited: nothing more for Claude to do on it. */
+const isPending = (i: PlanItem) => i.status === 'claimed' && i.note === undefined
 
 // ponytail: 32-bit string hash, enough to spot the same plan text approved twice
 const hashOf = (s: string) => String([...s].reduce((h, c) => (Math.imul(h, 31) + c.charCodeAt(0)) | 0, 0))
@@ -241,13 +239,13 @@ async function load($: EngineInterface) {
 }
 
 /**
- * Audits every non-verified item in one sonnet call, reading the tool calls and (when given) Claude's final reply;
- * never un-verifies. `quiet` toasts only when something new is verified. Returns what sonnet said, or undefined.
+ * Audits every non-verified item in one sonnet call, reading the tool calls, each mark_done claim and (when given)
+ * Claude's final reply; the only check there is, a mark_done alone verifies nothing. Never un-verifies. `quiet` toasts only when something new is verified. Returns what sonnet said, or undefined.
  */
 async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: string } = {}): Promise<Audit | undefined> {
   const before = await save($, t => ({ ...t, busy: 'verify' }))
   const pending = openItems(before)
-  const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ' (developer claims done)' : ''}`).join('\n')
+  const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ` (developer claims done: ${i.claim ?? ''})` : ''}`).join('\n')
   const prompt =
     `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
     `Developer's final reply:\n${(opts.reply || '(none)').slice(0, 4000)}`
@@ -299,7 +297,7 @@ export const register: Register = on => {
       name: 'mark_done',
       description:
         'Mark a plan-tracker item finished: its id from the open-items list and one line of evidence (what you ' +
-        'edited, ran or saw). A small model checks the claim against the recent tool calls.',
+        'edited, ran or saw). The claim is checked against your tool calls when the turn ends.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -348,7 +346,7 @@ export const register: Register = on => {
       if (prompt && path.startsWith(`${cwd}/`) && !path.includes('/docs/superpowers/')) await trackPrompt($)
     }
     if (r.deny !== undefined || ++sinceMark < REMIND_EVERY) return r
-    const open = openItems(await read($, tracker))
+    const open = openItems(await read($, tracker)).filter(i => !isPending(i))
     if (open.length === 0) return r
     sinceMark = 0
     const rows = open.slice(0, 10).map(i => `#${i.id} ${i.text.slice(0, 60)}`).join(' · ')
@@ -424,17 +422,14 @@ export const register: Register = on => {
       sinceMark = 0
       activePlan = found.plan.id
     }
-    const prompt = `Item #${id}: ${found.item.text}\nDeveloper's claim: ${String(e.evidence ?? '')}\n\nRecent tool calls:\n${await evidence($, 40)}`
-    const verdict = await ask($, 'sonnet', VERIFY, prompt)
-    const checked = isVerdict(verdict)
-    const status = checked && verdict.verdict === 'verified' ? 'verified' : 'claimed'
-    const reason = checked ? verdict.reason : 'verifier unavailable'
-    await save($, t => setItem(t, id, { status, note: reason }))
-    const message =
-      status === 'verified'
-        ? `Item #${id} verified.`
-        : `Item #${id} marked but NOT verified: ${reason}. Finish it, then mark again with better evidence.`
-    return { result: message }
+    if (found.item.status === 'verified') return { result: `Item #${id} is already verified.` }
+    // no model call here: the turn-end audit checks every claim in its one call
+    await save($, t => {
+      const { note: _note, ...item } = found.item
+      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300) }
+      return { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
+    })
+    return { result: `Item #${id} noted. The audit at the end of this turn checks it against your tool calls.` }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -444,7 +439,9 @@ export const register: Register = on => {
     const open = openItems(t)
     if (open.length === 0) return r
     const lines = open.map(i =>
-      i.status === 'claimed' ? `#${i.id} [claimed, unverified: ${i.note ?? ''}] ${i.text}` : `#${i.id} [open] ${i.text}`,
+      isPending(i) ? `#${i.id} [claimed, audit pending] ${i.text}`
+        : i.status === 'claimed' ? `#${i.id} [claimed, unverified: ${i.note}] ${i.text}`
+        : `#${i.id} [open] ${i.text}`,
     )
     const text = [
       '# Plan tracker',
