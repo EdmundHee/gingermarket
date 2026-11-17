@@ -321,6 +321,7 @@ export const register: Register = on => {
   on('tool.describe', { tool: MARK }, (_$, e) => ({ description: e.description, isDeferred: false }))
 
   on('turn.start', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e) // a subagent's run belongs to the main turn that spawned it
     worked = 0
     sinceMark = 0
     planTurn = false
