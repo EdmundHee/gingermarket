@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'claude-code/testing'
+import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
@@ -10,16 +10,28 @@ const PANE = {
 const GH = 'gh pr view --json number,url,state,isDraft'
 const NUMSTAT = 'git diff --numstat --summary --no-renames abc123'
 const LOG = 'git log --graph --oneline --decorate --boundary --color=never -n 12 main...HEAD'
+const BRANCH = 'git rev-parse --abbrev-ref HEAD'
+const HEAD_SHA = 'git rev-parse HEAD'
+const REFS = 'git for-each-ref --format=%(objectname) %(refname) refs/heads refs/remotes'
+const REV_MAIN = 'git rev-list --left-right --count HEAD...main'
 
-/** One git or gh answer: stdout (exit 0), an exit with stdout, or a command that cannot start. */
-type Answer = string | { exit: number; stdout?: string } | 'missing'
+/** One git or gh answer: stdout (exit 0), an exit with stdout, a command that cannot start, or one held open (`held`). */
+type Reply = string | { exit: number; stdout?: string } | 'missing'
+type Answer = Reply | Promise<Reply>
+
+/** An answer that stays unanswered until the test releases it with the real one. */
+function held() {
+  let release!: (a: Reply) => void
+  const answer = new Promise<Reply>(r => { release = r })
+  return { answer, release }
+}
 
 /** A branch `feat/x` cut from main: 2 ahead, 1 behind, nothing changed, no PR. */
 const repo = (): Record<string, Answer> => ({
-  'git rev-parse --abbrev-ref HEAD': 'feat/x\n',
-  'git for-each-ref --format=%(refname) refs/heads refs/remotes':
-    'refs/heads/feat/x\nrefs/heads/main\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/main\n',
-  'git rev-list --left-right --count HEAD...main': '2\t1\n',
+  [BRANCH]: 'feat/x\n',
+  [HEAD_SHA]: 'aaa0001\n',
+  [REFS]: 'aaa0001 refs/heads/feat/x\nbbb0001 refs/heads/main\nbbb0002 refs/remotes/origin/HEAD\nbbb0002 refs/remotes/origin/main\n',
+  [REV_MAIN]: '2\t1\n',
   'git rev-list --left-right --count HEAD...origin/main': '2\t3\n',
   'git merge-base HEAD main': 'abc123\n',
   [LOG]: '* 3e1c2aa (HEAD -> feat/x) feat: pane\n| * 9f8e7d1 (main) fix typo\n|/\no 872a03f Merge: plan-tracker\n',
@@ -31,10 +43,10 @@ const repo = (): Record<string, Answer> => ({
 /** Answers `process.run` from `answers` (read at call time, so a test may change them); records each argv. */
 function git(on: On, answers: Record<string, Answer>) {
   const ran: string[] = []
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     const argv = e.argv.join(' ')
     ran.push(argv)
-    const a = answers[argv] ?? ''
+    const a = await (answers[argv] ?? '')
     if (a === 'missing') return { deny: `${e.argv[0]}: command not found` }
     const { exit, stdout } = typeof a === 'string' ? { exit: 0, stdout: a } : { exit: a.exit, stdout: a.stdout ?? '' }
     return { value: { exitCode: exit, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -42,8 +54,10 @@ function git(on: On, answers: Record<string, Answer>) {
   return ran
 }
 
-async function start($: Engine, on: On, answers: Record<string, Answer>) {
-  const seen = { ran: git(on, answers), opened: [] as string[] }
+/** Hooks under the plugin; `settle` lets a refresh a dispatch left running finish. */
+function setup(on: On, answers: Record<string, Answer>) {
+  const clock = mock.clock(on)
+  const seen = { ran: git(on, answers), opened: [] as string[], settle: () => clock.settle() }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', (_$, e) => {
@@ -54,9 +68,32 @@ async function start($: Engine, on: On, answers: Record<string, Answer>) {
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('tool.call', { tool: 'Edit' }, () => ({ result: { ok: true } }))
   on('tool.call', { tool: 'Bash' }, () => ({ result: { stdout: '', stderr: '', interrupted: false } }))
-  await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
   return seen
 }
+
+const SESSION = { cwd: CWD, surface: 'terminal', isInteractive: true } as const
+
+async function start($: Engine, on: On, answers: Record<string, Answer>) {
+  const seen = setup(on, answers)
+  await $.session.start(SESSION)
+  await seen.settle()
+  return seen
+}
+
+const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: `${CWD}/a.ts`, old_string: 'a', new_string: 'b' })
+
+/** HEAD or a branch tip moves after start; the counts change with it (a commit is one more ahead of every ref). */
+const MOVES = [
+  {
+    name: 'head moved', head: 'c0ffee2\n',
+    move: { [HEAD_SHA]: 'c0ffee3\n', [REV_MAIN]: '3\t1\n', 'git rev-list --left-right --count HEAD...origin/main': '3\t3\n' },
+    header: 'feat/x ← main  3↑ 1↓',
+  },
+  {
+    name: 'tip moved', head: 'c0ffee4\n',
+    move: { [REFS]: 'c0ffee4 refs/heads/feat/x\nbbb0009 refs/heads/main\n', [REV_MAIN]: '2\t4\n' }, header: 'feat/x ← main  2↑ 4↓',
+  },
+]
 
 const mount = ($: Engine) =>
   $.ui.mount({ plugin: 'git-tracker', surface: 'terminal', component: 'Pane', requestId: 'git-tracker', props: PANE })
@@ -65,8 +102,8 @@ describe('git-tracker', () => {
   test('parent_fewest_ahead_picks_main', async ($, on) => {
     const answers = {
       ...repo(),
-      'git for-each-ref --format=%(refname) refs/heads refs/remotes':
-        'refs/heads/dev\nrefs/heads/feat/x\nrefs/heads/main\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/feat/x\nrefs/remotes/origin/main\n',
+      [REFS]:
+        'ccc0001 refs/heads/dev\naaa0001 refs/heads/feat/x\nbbb0001 refs/heads/main\nbbb0002 refs/remotes/origin/HEAD\naaa0001 refs/remotes/origin/feat/x\nbbb0002 refs/remotes/origin/main\n',
       'git rev-list --left-right --count HEAD...dev': '5\t0\n',
       'git rev-list --left-right --count HEAD...origin/feat/x': '0\t0\n',
     }
@@ -186,7 +223,8 @@ describe('git-tracker', () => {
     const seen = await start($, on, answers)
     answers[NUMSTAT] = '3\t0\ta.ts\n'
 
-    await $.tool.call({ tool: 'Edit', file_path: `${CWD}/a.ts`, old_string: 'a', new_string: 'b' })
+    await edit($)
+    await seen.settle()
 
     const pane = await mount($)
     expect((await pane.find({ key: 'file:a.ts' }))?.text).toContain('+3')
@@ -195,10 +233,11 @@ describe('git-tracker', () => {
 
   test('bash_gh_pr_refreshes_pr', async ($, on) => {
     const answers = repo()
-    await start($, on, answers)
+    const seen = await start($, on, answers)
     answers[GH] = '{"number":7,"url":"https://github.com/o/r/pull/7","state":"OPEN","isDraft":false}\n'
 
     await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' })
+    await seen.settle()
 
     const pane = await mount($)
     expect(await pane.find({ type: 'Text', text: 'PR #7 open' })).toBeDefined()
@@ -235,10 +274,11 @@ describe('git-tracker', () => {
 
   test('bash_git_push_refreshes_pr', async ($, on) => {
     const answers = repo()
-    await start($, on, answers)
+    const seen = await start($, on, answers)
     answers[GH] = '{"number":9,"url":"https://github.com/o/r/pull/9","state":"OPEN","isDraft":false}\n'
 
     await $.tool.call({ tool: 'Bash', command: 'git push -u origin feat/x' })
+    await seen.settle()
 
     const pane = await mount($)
     expect(await pane.find({ type: 'Text', text: 'PR #9 open' })).toBeDefined()
@@ -265,5 +305,108 @@ describe('git-tracker', () => {
     expect((await pane.find({ key: 'section:new' }))?.text).toContain('NEW 30')
     expect(await pane.find({ key: 'file:f30.md' })).toBeDefined()
     expect(await pane.find({ key: 'file:f31.md' })).toBeUndefined()
+  })
+
+  test('session_start_returns_while_git_runs', async ($, on) => {
+    const answers = repo()
+    const branch = held()
+    answers[BRANCH] = branch.answer
+    const seen = setup(on, answers)
+    let started = false
+
+    void $.session.start(SESSION).then(() => { started = true })
+    await seen.settle()
+    const startedWhileHeld = started
+    const pane = await mount($)
+    const loading = await pane.find({ type: 'Text', text: 'Reading git…' })
+    branch.release('feat/x\n')
+    await seen.settle()
+
+    expect(startedWhileHeld).toBe(true)
+    expect(loading).toBeDefined()
+    expect((await pane.find({ key: 'head' }))?.text).toContain('feat/x ← main  2↑ 1↓')
+  })
+
+  test('edit_call_returns_while_refresh_runs', async ($, on) => {
+    const answers = repo()
+    const seen = await start($, on, answers)
+    const numstat = held()
+    answers[NUMSTAT] = numstat.answer
+    let returned = false
+
+    void edit($).then(() => { returned = true })
+    await seen.settle()
+    const returnedWhileHeld = returned
+    numstat.release('3\t0\ta.ts\n')
+    await seen.settle()
+
+    expect(returnedWhileHeld).toBe(true)
+    const pane = await mount($)
+    expect((await pane.find({ key: 'file:a.ts' }))?.text).toContain('+3')
+  })
+
+  test('parent_counts_reused_while_head_unchanged', async ($, on) => {
+    const seen = await start($, on, { ...repo(), [HEAD_SHA]: 'c0ffee1\n' })
+
+    await edit($)
+    await seen.settle()
+
+    const pane = await mount($)
+    expect(seen.ran.filter(argv => argv === REV_MAIN)).toHaveLength(1)
+    expect((await pane.find({ key: 'head' }))?.text).toContain('feat/x ← main  2↑ 1↓')
+  })
+
+  for (const m of MOVES) {
+    test(`parent_recounted_when_head_or_tip_moves (${m.name})`, async ($, on) => {
+      const answers = { ...repo(), [HEAD_SHA]: m.head }
+      const seen = await start($, on, answers)
+      Object.assign(answers, m.move)
+
+      await edit($)
+      await seen.settle()
+
+      const pane = await mount($)
+      expect(seen.ran.filter(argv => argv === REV_MAIN)).toHaveLength(2)
+      expect((await pane.find({ key: 'head' }))?.text).toContain(m.header)
+    })
+  }
+
+  test('parent_rev_lists_run_8_at_a_time', async ($, on) => {
+    const names = Array.from({ length: 20 }, (_, i) => `b${String(i + 1).padStart(2, '0')}`)
+    const gate = held()
+    const seen = setup(on, {
+      ...repo(),
+      [REFS]: `aaa0001 refs/heads/feat/x\n${names.map(n => `bbb0001 refs/heads/${n}\n`).join('')}`,
+      ...Object.fromEntries(names.map(n => [`git rev-list --left-right --count HEAD...${n}`, gate.answer])),
+    })
+    const revLists = () => seen.ran.filter(argv => argv.startsWith('git rev-list '))
+
+    void $.session.start(SESSION)
+    await seen.settle()
+    const inFlight = revLists().length
+    gate.release('1\t0\n')
+    await seen.settle()
+
+    expect(inFlight).toBe(8)
+    expect(revLists()).toHaveLength(20)
+  })
+
+  test('edit_during_start_refresh_reruns_once', async ($, on) => {
+    const answers = repo()
+    const branch = held()
+    answers[BRANCH] = branch.answer
+    const seen = setup(on, answers)
+
+    void $.session.start(SESSION)
+    await seen.settle()
+    void edit($)
+    await seen.settle()
+    answers[NUMSTAT] = '3\t0\ta.ts\n'
+    branch.release('feat/x\n')
+    await seen.settle()
+
+    const pane = await mount($)
+    expect(seen.ran.filter(argv => argv === BRANCH)).toHaveLength(2)
+    expect((await pane.find({ key: 'file:a.ts' }))?.text).toContain('+3')
   })
 })
