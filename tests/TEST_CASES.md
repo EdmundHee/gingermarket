@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-10-25 · cd1e451+wip (feat/feature-tracker-0-7-0-scan-stamp) · validate ✔ · feature-tracker 90/90 · plan-tracker 55/55 · git-tracker 17/17
+last run: 2026-11-17 · 48a2bb4+wip (feat/plan-tracker-0-4-3-sonnet-checks) · validate ✔ · feature-tracker 90/90 · plan-tracker 55/55 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -35,7 +35,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-026 | pane shows group note and nudge count | unit | #1 open `nudges: 1`; group note `waiting on you: which DB` | mount pane | a Text matches `↻1`, another `waiting on you: which DB` | plan-tracker/hooks/register.test.ts > pane shows nudges and the group note | pass |
 | TC-027 | extraction has no item cap | unit | empty store; opus answers 40 strings | 1. approve plan | group holds 40 items, the last `step 40` | plan-tracker/hooks/register.test.ts > approval keeps every item opus lists | pass |
 | TC-028 | system prompt lists every open item | unit | 40 open items; tools include mark_done | 1. `$.prompt.compose()` | section `plan-tracker:open` contains `#40 [open] item 40` | plan-tracker/hooks/register.test.ts > compose lists every open item | pass |
-| TC-029 | opus only | unit | empty store; fake records `e.model` | 1. approve a plan 2. `$.tool.call mark_done {id:1, evidence}` 3. press `verify-all` | every `model.complete` call has `model: 'opus'` | plan-tracker/hooks/register.test.ts > every call asks opus | pass |
+| TC-029 | model per call | unit | empty store; fake records `e.model` | 1. approve a plan 2. `$.tool.call mark_done {id:1, evidence}` 3. press `verify-all` | `model.complete` models are `['opus','sonnet','sonnet']` | plan-tracker/hooks/register.test.ts > extraction asks opus, checks ask sonnet | pass |
 | TC-030 | verifier sees long output tail | unit | #1 open; transcript has one Bash output: `HEAD-MARK`, 200 pass lines, then `(fail) TAIL-MARK Received: ["haiku"]` | 1. `$.tool.call mark_done {id:1, evidence}` | verifier prompt contains `HEAD-MARK` and `TAIL-MARK Received: ["haiku"]` | plan-tracker/hooks/register.test.ts > verifier sees the head and tail of a long tool output | pass |
 | TC-031 | same plan approved again | unit | empty store; opus extract `["a","b"]` | 1. approve PLAN 2. approve PLAN again (same text) | one group, items still #1 #2, nextId 3, opus called once | plan-tracker/hooks/register.test.ts > approving the same plan again keeps its group and ids | pass |
 | TC-032 | same plan approved after failed extraction | unit | empty store; opus answers prose first, then `["a"]` | 1. approve PLAN 2. approve PLAN again | one group holding #1 `a`; the empty group is gone | plan-tracker/hooks/register.test.ts > approving the same plan after a failed extraction replaces the empty group | pass |

@@ -532,7 +532,7 @@ describe('plan-tracker', () => {
     expect(await pane.find({ type: 'Text', text: /waiting on you: which DB/ })).toBeDefined()
   })
 
-  test('every call asks opus', async ($, on) => {
+  test('extraction asks opus, checks ask sonnet', async ($, on) => {
     const models: string[] = []
     on('model.complete', (_$, e) => {
       models.push(e.model)
@@ -549,7 +549,7 @@ describe('plan-tracker', () => {
     const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
     await pane.press({ key: 'verify-all' })
 
-    expect(models).toEqual(['opus', 'opus', 'opus'])
+    expect(models).toEqual(['opus', 'sonnet', 'sonnet'])
   })
   test('verifier sees the head and tail of a long tool output', async ($, on) => {
     const prompts: string[] = []
