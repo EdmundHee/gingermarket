@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-11-17 · ae736d9+wip (feat/plan-tracker-0-4-4-instant-mark) · validate ✔ · feature-tracker 90/90 · plan-tracker 58/58 · git-tracker 17/17
+last run: 2026-11-17 · e5b9356+wip (fix/plan-tracker-subagent-turns) · validate ✔ · feature-tracker 90/90 · plan-tracker 60/60 · git-tracker 17/17
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -82,6 +82,8 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-187 | unproven claim stays claimed | unit | #1 open; fake audit answers unverified `no edit on a.ts` | 1. `$.tool.call mark_done {id:1, evidence}` 2. `$.turn.complete` | item `claimed`, note = `no edit on a.ts` | plan-tracker/hooks/register.test.ts > turn end leaves an unproven claim claimed | pass |
 | TC-188 | mark_done on a verified item | unit | #1 verified, note `by you` | 1. `$.tool.call mark_done {id:1, evidence}` | result contains `already verified`; item unchanged | plan-tracker/hooks/register.test.ts > mark_done on a verified item changes nothing | pass |
 | TC-189 | system prompt shows a pending claim | unit | #1 claimed with a `claim`, no note; tools include mark_done | 1. `$.prompt.compose()` | section contains `#1 [claimed, audit pending] item 1` | plan-tracker/hooks/register.test.ts > compose shows a fresh claim as audit pending | pass |
+| TC-190 | subagent turn keeps the plan turn's nudge | unit | #1 #2 #3 open; fake audit: #1 verified, #2 #3 unverified, reply partial | 1. `$.turn.start` `Work on plan item #1: item 1` 2. `$.turn.start {text:'Explore the parser', agentId:'sub'}` 3. Edit 4. `$.turn.complete` answer | one prompt submitted, starts `Work on plan items #2 #3:` | plan-tracker/hooks/register.test.ts > subagent turn start keeps the plan turn nudge | pass |
+| TC-191 | subagent turn keeps the typed prompt | unit | empty tracker; opus answers `["add x","test x"]` | 1. `$.turn.start` `add x with a test` 2. `$.turn.start {text:'Explore the repo', agentId:'sub'}` 3. Edit `${CWD}/src/a.ts` | one opus call; one group, title `add x with a test` | plan-tracker/hooks/register.test.ts > subagent turn start keeps the typed prompt | pass |
 | TC-077 | feature-tracker parse inventory | unit | features.md: module Auth (paths `a/**`, 4 features one per status) + 1 free line; module Billing | 1. start 2. mount Pane | `module:Auth` row; meta `1✓ 1◐ 1○ 1✗`; free line not drawn; `module:Billing` row; feature rows show the name only (`Login`, no ` — email`) | feature-tracker/hooks/register.test.ts > parses_modules_paths_and_statuses | pass |
 | TC-078 | feature-tracker empty state | unit | no features.md | 1. start 2. mount Pane | `scan` button + `No features.md yet` text; no `module:` rows | feature-tracker/hooks/register.test.ts > no_inventory_shows_scan_cta | pass |
 | TC-079 | feature-tracker scan creates | unit | vault mode; no features.md; reader answers 2 modules, Login with `desc` | 1. press `scan` 2. reader turn completes | features.md written: frontmatter `type: doc`, `Project: [[syph]]`, `## Auth`, `paths: a/**`, `- [done] Login` (desc dropped) | feature-tracker/hooks/register.test.ts > scan_writes_new_inventory | pass |

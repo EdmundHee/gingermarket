@@ -436,6 +436,19 @@ describe('plan-tracker', () => {
     expect(items.map(i => [i.status, i.nudges ?? 0])).toEqual([['verified', 0], ['open', 1], ['open', 1]])
   })
 
+  test('subagent turn start keeps the plan turn nudge', async ($, on) => {
+    opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'no test'], [3, 'unverified', 'untouched']], 'partial', 'said #3 is next'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open'], [3, 'open']]))
+
+    await startTurn($)
+    await $.turn.start({ text: 'Explore the parser', turnId: 't3', agentId: 'sub' })
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toMatch(/^Work on plan items #2 #3:/)
+  })
+
   test('blocked reply notes the group and sends nothing', async ($, on) => {
     opus(on, () => audit([[1, 'verified', 'ok'], [2, 'unverified', 'untouched']], 'blocked', 'asked which DB'))
     const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
@@ -719,6 +732,18 @@ describe('plan-tracker', () => {
     expect(group?.title).toBe('add x with a test')
     expect(group?.items.map(i => i.text)).toEqual(['add x', 'test x'])
     expect(group?.file).toBe('')
+  })
+
+  test('subagent turn start keeps the typed prompt', async ($, on) => {
+    const calls = opus(on, () => '["add x","test x"]')
+    const seen = await start($, on)
+
+    await startTurn($, 'add x with a test')
+    await $.turn.start({ text: 'Explore the repo', turnId: 't3', agentId: 'sub' })
+    await repoEdit($)
+
+    expect(calls.n).toBe(1)
+    expect(seen.state?.plans.map(p => p.title)).toEqual(['add x with a test'])
   })
 
   test('edits outside the repo or in docs/superpowers track no prompt', async ($, on) => {
