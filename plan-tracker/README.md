@@ -30,8 +30,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
     plan-mode drafts) never count, so questions and planning turns stay untracked. Each typed task gets its
     own group.
 - The pane splits groups into sections by source: `PLAN DOCS`, `PLAN MODE`, `TASKS` (empty ones
-  hidden), each with its verified/total. A group sits indented under its section with a progress bar
-  `▰▰▱▱▱▱▱▱▱▱ 2/10`; its items sit indented under it.
+  hidden), each with its verified/total. A group sits indented under its section: `▸` (or `▾`), its title,
+  a progress bar `▰▰▱▱▱▱▱▱▱▱ 2/10` and `x`. Groups start collapsed; `▸` shows the items, `▾` hides them.
 - A group from a file shows its path (relative to the project) under the title.
 - `▶` on an item sends Claude to work on it (a new turn, with the item and the plan file named).
 - `✓` on an item marks it verified by hand, for when the verifier is wrong.
@@ -56,11 +56,27 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - Every third file edit, command or subagent dispatch while items are open adds one reminder line to the tool result,
   which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
   restarts the count, so marks land as the work does, not at the end of the turn.
+- **Timing.** Every group keeps its own wall-clock time per phase, shown under its title: one row per phase
+  that has time, `●` on the one running, then Total. A fully verified group shows only its total on its one line.
+  The phase follows the tool calls:
+  - **Plan**: from the first prompt you send in plan mode (it also opens the pane with the keyboard on it),
+    and edits of the plan file before approval.
+  - **Codex review**: a Bash `codex exec` with `MODE: plan-review`. **Codex verify**: one with `MODE: acceptance`.
+  - **Dev**: from the approval, and every repo-file edit; **Review fixes** once a Codex verify has run for that group.
+  - **Test**: `claude plugin test|validate`, `npm|pnpm|yarn|bun test`, `pytest`, `vitest`, `jest`, `go|cargo test`,
+    `tests/screen/`, `tmux send-keys|capture-pane`. Other Bash (git, grep) switches nothing.
+  - **Waiting**: from the end of each turn until the next one, and while a question or plan-approval dialog is
+    up. A Codex run launched in the background keeps counting as Codex until the turn its result starts.
+  Before approval the time sits in a `Planning (not approved yet)` block at the top and moves into the group
+  on approval. A typed task counts from its prompt, a plan doc from the skill start. The clock follows the
+  group Claude marks or works on, and stops when that group's last item is verified or the group is removed.
+  `/clear` and a plugin reload keep it running; a new session does not count the time the app was closed.
+  Subagents' calls count too. Groups from before 0.4.6 have no time.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer; its items
   stay `already queued` until `/clear` or a new session.
 
 A second approval adds a new group on top; approving the same plan text again (say, re-shown after
-`/compact`) keeps its group and ids. A fully verified group collapses to one line. There is no
+`/compact`) keeps its group and ids. A fully verified group shrinks to one line. There is no
 cap on items: a list taller than the pane scrolls (arrows or wheel while the pane is focused).
 
 ## Cost
