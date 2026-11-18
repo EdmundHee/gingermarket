@@ -172,12 +172,15 @@ function stopIfDone(t: Tracker, now: number): Tracker {
   return rest
 }
 
+/** Dev work on a group that has had a Codex verify is Review fixes. */
+const devOf = (t: Tracker, id: string | undefined): Phase => ((groupOf(t, id)?.time?.verify ?? 0) > 0 ? 'fixes' : 'dev')
+
 /** Points the clock at group `id`; with no clock, starts one there when that group still has work. A planning run stays. */
 function retarget(t: Tracker, now: number, id: string | undefined): Tracker {
   const g = groupOf(t, id)
   if (!g || isDone(g) || t.clock?.group === g.id || isPlanning(t)) return t
   if (t.clock) return switchTo(t, now, t.clock.phase, g.id)
-  return { ...t, clock: { group: g.id, phase: 'dev', since: now, session: sessionId } }
+  return { ...t, clock: { group: g.id, phase: devOf(t, g.id), since: now, session: sessionId } }
 }
 
 /** The phase a Bash command starts, or undefined for one that switches nothing. */
@@ -193,14 +196,14 @@ function bashPhase(command: string, planning: boolean): Phase | undefined {
 /** A tool call started `phase`: the clock moves there, first onto the active group when none runs. Dev after a Codex verify is Review fixes. */
 async function enter($: EngineInterface, phase: Phase, bg = false) {
   const t = await read($, tracker)
-  const cur = t.clock?.phase
-  if (t.clock && !bg && (cur === phase || (phase === 'dev' && cur === 'fixes'))) return
+  // the target counts a verify still running into the group, so the first edit after it is already Review fixes
+  const target = (s: Tracker) => (phase === 'dev' && (s.clock?.phase === 'verify' || devOf(s, s.clock?.group) === 'fixes') ? 'fixes' : phase)
+  if (t.clock && !bg && t.clock.phase === target(t)) return
   if (!t.clock && !retarget(t, 0, activePlan).clock) return // nothing to time: write nothing
   await save($, (s, now) => {
     const on = flush(s.clock ? s : retarget(s, now, activePlan), now)
     if (!on.clock) return s
-    const verified = (groupOf(on, on.clock.group)?.time?.verify ?? 0) > 0
-    const next = switchTo(on, now, phase === 'dev' && verified ? 'fixes' : phase)
+    const next = switchTo(on, now, target(on))
     const { bg: _bg, ...clock } = next.clock ?? on.clock
     return { ...next, clock: bg ? { ...clock, bg: true } : clock }
   })

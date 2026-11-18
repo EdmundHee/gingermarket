@@ -1121,12 +1121,15 @@ describe('plan-tracker', () => {
     await endTurn($)
 
     await seen.clock.advance(60 * SEC)
-    await $.turn.start({ text: 'also look at X', turnId: 't3' })
-    await endTurn($)
+    await planPrompt($) // the user types again in plan mode while Codex still runs
+    await $.turn.start({ text: 'plan this', turnId: 't3' })
     await seen.clock.advance(60 * SEC)
+    await $.tool.call({ tool: 'Write', file_path: '/Users/x/.claude/plans/p.md', content: 'plan' })
 
     expect(await timeRow($, 'pending', 'review')).toContain('1m 00s')
-    expect(await timeRow($, 'pending', 'waiting')).toContain('1m 00s')
+    const plan = await timeRow($, 'pending', 'plan')
+    expect(plan).toContain('●')
+    expect(plan).toContain('1m 00s')
   })
 
   test('dialog_time_is_waiting', async ($, on) => {
@@ -1271,6 +1274,23 @@ describe('plan-tracker', () => {
     const dev = await timeRow($, 'p1', 'dev')
     expect(dev).toContain('●')
     expect(dev).toMatch(/(^|\D)20s$/)
+  })
+
+  test('resumed_group_with_codex_verify_time_edits_as_review_fixes', async ($, on) => {
+    const base = seeded([[1, 'open']])
+    const p1 = { ...base.plans[0]!, time: { verify: 30 * SEC } }
+    const tracker: Tracker = { ...base, nextId: 3, plans: [p1, { ...p1, id: 'p2', title: 'Done', time: {}, items: [{ id: 2, text: 'item 2', status: 'verified' }] }] }
+    const seen = await start($, on, tracker, [], T)
+
+    await startTurn($, 'Work on plan item #1: item 1')
+    await repoEdit($)
+    await seen.clock.advance(10 * SEC)
+
+    expect(seen.state?.clock?.phase).toBe('fixes')
+    const fixes = await timeRow($, 'p1', 'fixes')
+    expect(fixes).toContain('●')
+    expect(fixes).toMatch(/(^|\D)10s$/)
+    expect(await timeRow($, 'p1', 'dev')).toBeUndefined()
   })
 
   test('subagent_test_run_counts_as_test', async ($, on) => {
