@@ -1039,6 +1039,9 @@ describe('plan-tracker', () => {
     const keys = (await pane.findAll({ type: 'Box' })).map(b => b.key).filter(k => k !== undefined)
     expect(keys.indexOf('time')).toBeGreaterThan(keys.indexOf('section:mode'))
     expect(keys.slice(keys.indexOf('time')).every(k => k.startsWith('time'))).toBe(true)
+    const all = (await pane.findAll({})).map(n => n.key)
+    expect(all.indexOf('time')).toBeGreaterThan(all.indexOf('verify-all'))
+    expect(all).toContain('verify-all')
   })
 
   test('total_stops_at_verification_not_at_last_mark', async ($, on) => {
@@ -1122,14 +1125,75 @@ describe('plan-tracker', () => {
   })
 
   test('removed_timed_group_leaves_planning_and_total', async ($, on) => {
-    await start($, on, timed([[1, 'open']]), [], T + 3723 * SEC)
+    const seen = await start($, on, timed([[1, 'open']]), [], T + 3723 * SEC)
     const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
 
     await pane.press({ key: 'remove:p1' })
 
-    expect(await pane.find({ key: 'time:item:1' })).toBeUndefined()
-    expect((await pane.find({ key: 'time:planning' }))?.text).toContain('1m 30s')
-    expect((await pane.find({ key: 'time:total' }))?.text).toContain('1m 30s')
+    await seen.clock.advance(600 * SEC)
+    await pane.unmount()
+
+    expect(await timeRow($, 'item:1')).toBe('')
+    expect(await timeRow($, 'planning')).toContain('1m 30s')
+    expect(await timeRow($, 'total')).toContain('1h 02m')
+  })
+
+  test('reapproved_verified_plan_ends_the_run_at_approval', async ($, on) => {
+    opus(on, () => '["edit a"]')
+    approved(on)
+    const seen = await start($, on)
+    await seen.clock.set(T)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'done:1' })
+    await pane.unmount()
+    await seen.clock.advance(100 * SEC)
+    await planPrompt($)
+
+    await seen.clock.advance(20 * SEC)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await seen.clock.advance(600 * SEC)
+
+    expect(seen.state?.timing?.endedAt).toBe(T + 120 * SEC)
+    expect(await timeRow($, 'total')).toContain('20s')
+  })
+
+  test('reapproval_after_failed_extraction_times_the_new_group', async ($, on) => {
+    let answer = 'not json'
+    opus(on, () => answer)
+    approved(on)
+    const seen = await start($, on)
+    await seen.clock.set(T)
+    await planPrompt($)
+    await seen.clock.advance(30 * SEC)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    answer = '["edit a"]'
+    await seen.clock.advance(30 * SEC)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await seen.clock.advance(10 * SEC)
+
+    expect(seen.state?.timing).toMatchObject({ planAt: T + 30 * SEC, plan: seen.state?.plans[0]?.id })
+    expect(await timeRow($, 'item:1')).toContain('40s')
+  })
+
+  test('extraction_time_counts_toward_the_first_item_not_planning', async ($, on) => {
+    approved(on)
+    const late: { advance?: (ms: number) => Promise<void> } = {} // the clock exists only once start() has run
+    on('model.complete', async () => {
+      await late.advance?.(10 * SEC)
+      return { value: { isAnswered: true as const, text: '["edit a"]', usage: USAGE } }
+    })
+    const seen = await start($, on)
+    late.advance = seen.clock.advance
+    await seen.clock.set(T)
+    await planPrompt($)
+
+    await seen.clock.advance(30 * SEC)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    expect(await timeRow($, 'planning')).toContain('30s')
+    expect(await timeRow($, 'item:1')).toContain('10s')
   })
 
   test('long_run_shows_hours_and_minutes', async ($, on) => {

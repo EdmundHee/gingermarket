@@ -89,9 +89,8 @@ async function save($: EngineInterface, change: (t: Tracker) => Tracker) {
 
 const timedGroup = (t: Tracker) => t.plans.find(p => p.id === t.timing?.plan)
 
-/** A run is live until its last item is verified; one whose group was removed has nothing left to time. */
-const isLive = (t: Tracker) =>
-  t.timing !== undefined && t.timing.endedAt === undefined && (t.timing.planAt === undefined || timedGroup(t) !== undefined)
+/** A run is live until its last item is verified or its group is removed. */
+const isLive = (t: Tracker) => t.timing !== undefined && t.timing.endedAt === undefined
 
 /** Keeps one 1 s redraw going while a run is live, none otherwise. */
 function tick($: EngineInterface, t: Tracker) {
@@ -129,7 +128,6 @@ function timeRows(t: Tracker, timing: Timing, now: number): Array<[string, strin
   const last = Math.max(...marks)
   const next = items.find(i => i.doneAt === undefined && i.status !== 'verified') // ponytail: list order; out-of-order work shows its running time on this row until marked
   const glyph = { open: '○', claimed: '⚠', verified: '✓' } as const
-  const end = timing.endedAt ?? (approved && items.length === 0 && !timedGroup(t) ? timing.planAt ?? now : now)
   return [
     ['planning', 'Planning', fmt((timing.planAt ?? now) - timing.startedAt), !approved],
     ...items.map((i): [string, string, string, boolean] => {
@@ -137,7 +135,7 @@ function timeRows(t: Tracker, timing: Timing, now: number): Array<[string, strin
       if (i.doneAt !== undefined) return [`item:${i.id}`, label, fmt(i.doneAt - Math.max(...marks.filter(m => m < (i.doneAt ?? 0)), timing.planAt ?? timing.startedAt)), false]
       return i === next ? [`item:${i.id}`, label, fmt(now - last), true] : [`item:${i.id}`, label, '–', false]
     }),
-    ['total', 'Total', fmt(end - timing.startedAt), isLive(t)],
+    ['total', 'Total', fmt((timing.endedAt ?? now) - timing.startedAt), isLive(t)],
   ]
 }
 
@@ -287,11 +285,27 @@ async function byHand($: EngineInterface, id: number) {
   await save($, t => ended(finish(t, id, now, { status: 'verified', note: 'by you' }), now))
 }
 
-/** The plan's approval ends Planning; with no plan-mode prompt seen, the run starts here. */
-async function planned($: EngineInterface, plan: string | undefined) {
+/**
+ * The plan's approval at `now` ends Planning; with no plan-mode prompt seen, the run starts here. A run whose group
+ * is gone (a failed extraction, approved again) moves to the new group. A group already verified ends the run at once.
+ */
+async function planned($: EngineInterface, plan: string | undefined, now: number) {
   if (!plan) return
+  await save($, t => {
+    const run = t.timing
+    if (run && run.planAt !== undefined && (run.endedAt !== undefined || timedGroup(t))) return t
+    return ended({ ...t, timing: { startedAt: run?.startedAt ?? now, planAt: run?.planAt ?? now, plan } }, now)
+  })
+}
+
+/** The `x` button: the group goes; a run timing it stops there. */
+async function removeGroup($: EngineInterface, id: string) {
   const now = await $.clock.now()
-  await save($, t => (t.timing && t.timing.planAt === undefined ? { ...t, timing: { ...t.timing, planAt: now, plan } } : t.timing ? t : { ...t, timing: { startedAt: now, planAt: now, plan } }))
+  await save($, t => ({
+    ...t,
+    plans: t.plans.filter(p => p.id !== id),
+    ...(t.timing && t.timing.plan === id && t.timing.endedAt === undefined ? { timing: { ...t.timing, endedAt: now } } : {}),
+  }))
 }
 
 /** A session's start, or a /clear (no session.start, $.state back to EMPTY): turn state reset, store loaded. */
@@ -465,10 +479,11 @@ export const register: Register = on => {
       const file = result?.filePath ?? ''
       const text = result?.plan ?? (file ? await $.fs.read(file) : '')
       if (text) {
+        const at = await $.clock.now() // before the extraction: its seconds belong to the first item, not to Planning
         activePlan = await addPlan($, text, file)
         planTurn = true
         prompt = ''
-        await planned($, activePlan)
+        await planned($, activePlan, at)
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -597,7 +612,7 @@ export const register: Register = on => {
               <Text bold={!done} dimColor={done} wrap="truncate">{`${done ? '✓ ' : ''}${plan.title}`}</Text>
             </Box>
             <Text dimColor>{`${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)} ${ok}/${plan.items.length}`}</Text>
-            <Button key={`remove:${plan.id}`} plain dimColor onPress={() => save($, s => ({ ...s, plans: s.plans.filter(p => p.id !== plan.id) }))}>x</Button>
+            <Button key={`remove:${plan.id}`} plain dimColor onPress={() => removeGroup($, plan.id)}>x</Button>
           </Box>
           {plan.file !== '' && !done && (
             <Text dimColor wrap="truncate-start">{plan.file.startsWith(`${cwd}/`) ? plan.file.slice(cwd.length + 1) : plan.file}</Text>
