@@ -1,13 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolUseSummary } from 'claude-code'
 
-import type { PlanGroup, PlanItem, Timing, Tracker } from '../types'
+import type { Clock, Phase, PlanGroup, PlanItem, Times, Tracker } from '../types'
 
 const PANE = 'plan-tracker'
 const DOCK_COLUMNS = 48 // width when docked beside a fullscreen transcript; inline ignores it
 const MARK = 'mcp__plan-tracker__mark_done'
 const EMPTY: Tracker = { nextId: 1, plans: [] }
 const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
+/** Ids of the groups whose items are shown; every group starts collapsed. Not stored: a session's view only. */
+const expanded = atom({ plugin: 'plan-tracker', key: 'expanded' } as const, [] as string[])
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 /** Tools whose call could finish an item; a turn with none ends without an audit. Agent: subagent-driven runs. */
 const WORK = new Set([...EDITS, 'Bash', 'Agent'])
@@ -32,7 +34,18 @@ let storeKey = ''
 let cwd = ''
 let prompt = '' // the typed text of the running turn, until its first repo edit tracks it
 let lastDoc: string | undefined // the plan doc last written this session
-let ticking: { cancel: () => void } | undefined // redraws the timing card each second while a run is live
+let ticking: { cancel: () => void } | undefined // redraws the pane each second while a clock runs
+let sessionId = '' // a clock stamped with another session's id skips the gap since then
+let turnAt = 0 // when the running main turn started: a typed task's clock starts there
+
+/** The pane's phase rows, in order. */
+const PHASES: ReadonlyArray<readonly [Phase, string]> = [
+  ['plan', 'Plan'], ['review', 'Codex review'], ['dev', 'Dev'], ['fixes', 'Review fixes'],
+  ['test', 'Test'], ['verify', 'Codex verify'], ['waiting', 'Waiting'],
+]
+const CODEX = /\bcodex\s+exec\b/
+// ponytail: phase from the command text; a test behind a script name (`make check`) switches nothing, add a pattern when it matters
+const TEST_CMD = /\bclaude plugin (test|validate)\b|\b(npm|pnpm|yarn|bun)( run)? test\b|\b(pytest|vitest|jest)\b|\b(go|cargo) test\b|tests\/screen\/|\btmux (send-keys|capture-pane)\b/
 
 const EXTRACT =
   "You extract a checklist from an implementation plan or a developer's task request. Return ONLY a JSON array of " +
@@ -79,37 +92,118 @@ function status(t: Tracker) {
 }
 
 /** Every change goes through here: state for the pane, store for the next session, status line for the eye. */
-async function save($: EngineInterface, change: (t: Tracker) => Tracker) {
-  const next = await update($, tracker, change)
+async function save($: EngineInterface, change: (t: Tracker, now: number) => Tracker) {
+  const now = await $.clock.now()
+  const next = await update($, tracker, t => stopIfDone(change(t, now), now))
   await $.store.set(storeKey, next)
   $.ui.status(status(next))
   tick($, next)
   return next
 }
 
-const timedGroup = (t: Tracker) => t.plans.find(p => p.id === t.timing?.plan)
+/** `save` only while a clock runs: a turn with no timing writes nothing. */
+async function onClock($: EngineInterface, change: (t: Tracker, now: number) => Tracker) {
+  if ((await read($, tracker)).clock) await save($, change)
+}
 
-/** A run is live until its last item is verified or its group is removed. */
-const isLive = (t: Tracker) => t.timing !== undefined && t.timing.endedAt === undefined
+const groupOf = (t: Tracker, id: string | undefined) => t.plans.find(p => p.id === id)
+const isDone = (p: PlanGroup) => p.items.length > 0 && p.items.every(i => i.status === 'verified')
+const isPlanning = (t: Tracker) => t.clock !== undefined && t.clock.group === undefined
+/** A repo file, not a spec or plan doc, a vault note, a memory file or a plan-mode draft. */
+const isRepo = (path: string) => path.startsWith(`${cwd}/`) && !path.includes('/docs/superpowers/')
 
-/** Keeps one 1 s redraw going while a run is live, none otherwise. */
+/** Keeps one 1 s redraw going while a clock runs, none otherwise. */
 function tick($: EngineInterface, t: Tracker) {
-  if (isLive(t)) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
+  if (t.clock) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
   else {
     ticking?.cancel()
     ticking = undefined
   }
 }
 
-/** `patch` on item `id`, stamped with the time it was first marked or verified. */
-const finish = (t: Tracker, id: number, now: number, patch: Partial<PlanItem>): Tracker =>
-  setItem(t, id, { ...patch, doneAt: findItem(t, id)?.item.doneAt ?? now })
+const add = (times: Times | undefined, phase: Phase, ms: number): Times => ({ ...times, [phase]: (times?.[phase] ?? 0) + ms })
+const sum = (times: Times) => Object.values(times).reduce((a, b) => a + (b ?? 0), 0)
 
-/** Ends the run once every item of its group is verified. */
-function ended(t: Tracker, now: number): Tracker {
-  const items = timedGroup(t)?.items ?? []
-  if (!t.timing || t.timing.endedAt !== undefined || items.length === 0 || items.some(i => i.status !== 'verified')) return t
-  return { ...t, timing: { ...t.timing, endedAt: now } }
+/** The time since the clock's last move lands in its phase: `pending`, or its group's `time` (dropped when that group is gone). */
+function flush(t: Tracker, now: number): Tracker {
+  const c = t.clock
+  if (!c) return t
+  const ms = Math.max(0, now - c.since)
+  const clock: Clock = { ...c, since: Math.max(now, c.since) }
+  if (c.group === undefined) return { ...t, clock, pending: add(t.pending, c.phase, ms) }
+  return { ...t, clock, plans: t.plans.map(p => (p.id === c.group ? { ...p, time: add(p.time, c.phase, ms) } : p)) }
+}
+
+/** Flushes, then runs `phase` (on `group` when given). Without a clock nothing runs. */
+function switchTo(t: Tracker, now: number, phase: Phase, group?: string): Tracker {
+  if (!t.clock) return t
+  const next = flush(t, now)
+  const { resume: _resume, ...clock } = next.clock ?? t.clock
+  return { ...next, clock: { ...clock, phase, ...(group === undefined ? {} : { group }) } }
+}
+
+/** Waiting on the user; `resume` keeps the phase to go back to. */
+function wait(t: Tracker, now: number): Tracker {
+  if (!t.clock || t.clock.phase === 'waiting') return t
+  const next = switchTo(t, now, 'waiting')
+  return { ...next, clock: { ...(next.clock ?? t.clock), resume: t.clock.phase } }
+}
+
+/** Back from Waiting to the phase before it. */
+const resume = (t: Tracker, now: number): Tracker => (t.clock?.phase === 'waiting' ? switchTo(t, now, t.clock.resume ?? 'dev') : t)
+
+/** Starts timing group `id` at `at`, never before the clock's last move; a planning run's buckets move into it. */
+function attach(t: Tracker, at: number, id: string, phase: Phase = 'dev'): Tracker {
+  const when = Math.max(at, t.clock?.since ?? at)
+  const { pending, ...next } = flush(t, when)
+  const moved = isPlanning(t) ? pending : undefined
+  const plans = next.plans.map(p => (p.id === id && moved ? { ...p, time: PHASES.reduce((acc, [ph]) => add(acc, ph, moved[ph] ?? 0), p.time) } : p))
+  const keep = isPlanning(t) || pending === undefined ? {} : { pending }
+  return { ...next, ...keep, plans, clock: { group: id, phase, since: when, session: sessionId } }
+}
+
+/** A clock whose group is gone, or has items all verified, stops; its time up to `now` stays with the group. */
+function stopIfDone(t: Tracker, now: number): Tracker {
+  const id = t.clock?.group
+  if (id === undefined) return t
+  const g = groupOf(t, id)
+  if (g && !isDone(g)) return t
+  const { clock: _clock, ...rest } = flush(t, now)
+  return rest
+}
+
+/** Points the clock at group `id`; with no clock, starts one there when that group still has work. A planning run stays. */
+function retarget(t: Tracker, now: number, id: string | undefined): Tracker {
+  const g = groupOf(t, id)
+  if (!g || isDone(g) || t.clock?.group === g.id || isPlanning(t)) return t
+  if (t.clock) return switchTo(t, now, t.clock.phase, g.id)
+  return { ...t, clock: { group: g.id, phase: 'dev', since: now, session: sessionId } }
+}
+
+/** The phase a Bash command starts, or undefined for one that switches nothing. */
+function bashPhase(command: string, planning: boolean): Phase | undefined {
+  if (CODEX.test(command)) {
+    if (/MODE: plan-review/.test(command)) return 'review'
+    if (/MODE: acceptance/.test(command)) return 'verify'
+    return planning ? 'review' : 'verify'
+  }
+  return TEST_CMD.test(command) ? 'test' : undefined
+}
+
+/** A tool call started `phase`: the clock moves there, first onto the active group when none runs. Dev after a Codex verify is Review fixes. */
+async function enter($: EngineInterface, phase: Phase, bg = false) {
+  const t = await read($, tracker)
+  const cur = t.clock?.phase
+  if (t.clock && !bg && (cur === phase || (phase === 'dev' && cur === 'fixes'))) return
+  if (!t.clock && !retarget(t, 0, activePlan).clock) return // nothing to time: write nothing
+  await save($, (s, now) => {
+    const on = flush(s.clock ? s : retarget(s, now, activePlan), now)
+    if (!on.clock) return s
+    const verified = (groupOf(on, on.clock.group)?.time?.verify ?? 0) > 0
+    const next = switchTo(on, now, phase === 'dev' && verified ? 'fixes' : phase)
+    const { bg: _bg, ...clock } = next.clock ?? on.clock
+    return { ...next, clock: bg ? { ...clock, bg: true } : clock }
+  })
 }
 
 /** `45s`, `3m 05s`, `1h 02m`; never negative. */
@@ -120,23 +214,9 @@ function fmt(ms: number) {
   return s < 3600 ? `${Math.floor(s / 60)}m ${two(s % 60)}s` : `${Math.floor(s / 3600)}h ${two(Math.floor((s % 3600) / 60))}m`
 }
 
-/** The timing card's rows as [key, label, time, isRunning]: Planning, the timed group's items, Total. */
-function timeRows(t: Tracker, timing: Timing, now: number): Array<[string, string, string, boolean]> {
-  const items = timedGroup(t)?.items ?? []
-  const approved = timing.planAt !== undefined
-  const marks = [timing.planAt ?? timing.startedAt, ...items.flatMap(i => (i.doneAt === undefined ? [] : [i.doneAt]))]
-  const last = Math.max(...marks)
-  const next = items.find(i => i.doneAt === undefined && i.status !== 'verified') // ponytail: list order; out-of-order work shows its running time on this row until marked
-  const glyph = { open: '○', claimed: '⚠', verified: '✓' } as const
-  return [
-    ['planning', 'Planning', fmt((timing.planAt ?? now) - timing.startedAt), !approved],
-    ...items.map((i): [string, string, string, boolean] => {
-      const label = `${glyph[i.status]} #${i.id} ${i.text}`
-      if (i.doneAt !== undefined) return [`item:${i.id}`, label, fmt(i.doneAt - Math.max(...marks.filter(m => m < (i.doneAt ?? 0)), timing.planAt ?? timing.startedAt)), false]
-      return i === next ? [`item:${i.id}`, label, fmt(now - last), true] : [`item:${i.id}`, label, '–', false]
-    }),
-    ['total', 'Total', fmt((timing.endedAt ?? now) - timing.startedAt), isLive(t)],
-  ]
+/** The `▸/▾` button: shows or hides a group's items. */
+async function toggle($: EngineInterface, id: string) {
+  await update($, expanded, ids => (ids.includes(id) ? ids.filter(x => x !== id) : [...ids, id]))
 }
 
 const setItem = (t: Tracker, id: number, patch: Partial<PlanItem>): Tracker => ({
@@ -206,10 +286,13 @@ async function addPlan(
   const id = String(Date.now())
   await save($, t => {
     const items = newItems(t, texts ?? [])
-    const group: PlanGroup = { id, title, file, hash, approvedAt: new Date().toISOString(), items }
+    const isFailed = (p: PlanGroup) => p.hash === hash && p.items.length === 0 // a failed copy of this plan
+    const failed = t.plans.find(isFailed)
+    const group: PlanGroup = { id, title, file, hash, approvedAt: new Date().toISOString(), items, ...(failed?.time ? { time: failed.time } : {}) }
     if (!texts) group.note = 'could not extract items; press extract again'
-    const plans = t.plans.filter(p => !(p.hash === hash && p.items.length === 0)) // a failed copy of this plan
-    return { ...t, nextId: t.nextId + items.length, plans: [group, ...plans] }
+    // in this same change, or stopIfDone sees the clock's group gone and drops it
+    const clock = t.clock && failed && t.clock.group === failed.id ? { clock: { ...t.clock, group: id } } : {}
+    return { ...t, ...clock, nextId: t.nextId + items.length, plans: [group, ...t.plans.filter(p => !isFailed(p))] }
   })
   $.ui.toast(texts ? `tracker: ${texts.length} items from "${title}"` : `tracker: could not extract items from "${title}"`)
   return id
@@ -226,6 +309,7 @@ async function trackPrompt($: EngineInterface) {
   if (id) {
     activePlan = id
     planTurn = true
+    await save($, t => attach(t, turnAt, id))
   }
 }
 
@@ -279,46 +363,28 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
   $.ui.toast(`sent ${ids}`)
 }
 
-/** The `✓` button: verified by the user. */
-async function byHand($: EngineInterface, id: number) {
-  const now = await $.clock.now()
-  await save($, t => ended(finish(t, id, now, { status: 'verified', note: 'by you' }), now))
-}
-
 /**
- * The plan's approval at `now` ends Planning; with no plan-mode prompt seen, the run starts here. A run whose group
- * is gone (a failed extraction, approved again) moves to the new group. A group already verified ends the run at once.
+ * A session's start (`fresh`), or a /clear (no session.start, $.state back to EMPTY): turn state reset, store loaded.
+ * A clock from another session restarts now, so the time with no session running is not counted; a reload or a
+ * /clear keeps it running.
  */
-async function planned($: EngineInterface, plan: string | undefined, now: number) {
-  if (!plan) return
-  await save($, t => {
-    const run = t.timing
-    if (run && run.planAt !== undefined && (run.endedAt !== undefined || timedGroup(t))) return t
-    return ended({ ...t, timing: { startedAt: run?.startedAt ?? now, planAt: run?.planAt ?? now, plan } }, now)
-  })
-}
-
-/** The `x` button: the group goes; a run timing it stops there. */
-async function removeGroup($: EngineInterface, id: string) {
-  const now = await $.clock.now()
-  await save($, t => ({
-    ...t,
-    plans: t.plans.filter(p => p.id !== id),
-    ...(t.timing && t.timing.plan === id && t.timing.endedAt === undefined ? { timing: { ...t.timing, endedAt: now } } : {}),
-  }))
-}
-
-/** A session's start, or a /clear (no session.start, $.state back to EMPTY): turn state reset, store loaded. */
-async function load($: EngineInterface) {
+async function load($: EngineInterface, fresh: boolean) {
   planTurn = false
-  activePlan = undefined
   prompt = ''
   lastDoc = undefined
   queued.clear() // ponytail: a prompt pulled back with Up keeps its ids queued until then; no event frees them sooner
-  const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
+  sessionId = String(await $.session.id())
+  const saved = ((await $.store.get(storeKey)) as (Tracker & { timing?: unknown }) | undefined) ?? EMPTY
+  const { busy: _busy, timing: _timing, ...rest } = saved // timing: the 0.4.6 card's run, gone
+  const c = rest.clock
+  const gap = fresh && c !== undefined && c.session !== sessionId
+  // ponytail: `--resume` keeps the session id, so its gap counts; a stored heartbeat would fix that if it matters
+  const stored: Tracker = c ? { ...rest, clock: { ...c, session: sessionId, ...(gap ? { since: await $.clock.now() } : {}) } } : rest
+  if (c && c.session !== sessionId) await $.store.set(storeKey, stored)
+  activePlan = stored.clock?.group
   await update($, tracker, () => stored)
   $.ui.status(status(stored))
-  ticking?.cancel() // a /clear drops the old session's timer
+  ticking?.cancel() // a /clear or reload drops the old timer
   ticking = undefined
   tick($, stored)
   void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
@@ -338,15 +404,14 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
   const answer = await ask($, 'sonnet', AUDIT, prompt, 4096)
   const audit = isAudit(answer) ? answer : undefined
   const verdicts = audit?.items.filter(isVerdict) ?? []
-  const now = await $.clock.now()
   const after = await save($, ({ busy: _busy, ...t }) => {
     let next: Tracker = t
     for (const v of verdicts) {
       const found = findItem(next, Number(v.id))
       if (!found || found.item.status === 'verified') continue
-      next = v.verdict === 'verified' ? finish(next, found.item.id, now, { status: 'verified', note: v.reason }) : setItem(next, found.item.id, { note: v.reason })
+      next = setItem(next, found.item.id, v.verdict === 'verified' ? { status: 'verified', note: v.reason } : { note: v.reason })
     }
-    return ended(next, now)
+    return next
   })
   const newly = verdicts.filter(v => v.verdict === 'verified' && pending.some(i => i.id === Number(v.id))).map(v => `#${v.id}`)
   if (opts.quiet) {
@@ -379,7 +444,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
     storeKey = `tracker:${cwd}`
-    await load($)
+    await load($, true)
     await $.tool.register({
       name: 'mark_done',
       description:
@@ -400,19 +465,21 @@ export const register: Register = on => {
 
   // /clear starts a new session id with no session.start; unloaded, the next save would write EMPTY over the store
   on('classic.SessionStart', async ($, e, next) => {
-    if (e.source === 'clear') await load($)
+    if (e.source === 'clear') await load($, false)
     return next(e)
   })
 
   // No event marks the plan-mode toggle itself; the first prompt sent in plan mode is the earliest sign of it.
   on('classic.UserPromptSubmit', async ($, e, next) => {
-    const t = await read($, tracker)
-    if (e.permission_mode === 'plan' && (!t.timing || t.timing.planAt !== undefined)) {
-      const startedAt = await $.clock.now()
-      await save($, s => ({ ...s, timing: { startedAt } }))
-      // focus is a request: the engine gives the keys only over an empty composer, with no dialog up
-      void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS, focus: true })
+    if (e.permission_mode !== 'plan') return next(e)
+    if (isPlanning(await read($, tracker))) {
+      await save($, (t, now) => switchTo(t, now, 'plan'))
+      return next(e)
     }
+    // a new run: the group timed so far keeps its time and stops
+    await save($, (t, now) => ({ ...flush(t, now), pending: {}, clock: { phase: 'plan', since: now, session: sessionId } }))
+    // focus is a request: the engine gives the keys only over an empty composer, with no dialog up
+    void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS, focus: true })
     return next(e)
   })
 
@@ -424,27 +491,45 @@ export const register: Register = on => {
     worked = 0
     sinceMark = 0
     planTurn = false
+    turnAt = await $.clock.now()
+    // ponytail: bg ends at any turn start; a prompt typed while Codex still runs ends its Codex time early
+    await onClock($, (t, now) => {
+      const back = resume(t, now)
+      const { bg: _bg, ...clock } = back.clock ?? {}
+      return back.clock ? { ...back, clock: clock as Clock } : back
+    })
     const ids = (WORK_PROMPT.exec(e.text)?.[1]?.match(/\d+/g) ?? []).map(Number)
     prompt = ids.length || !e.text.trim() ? '' : e.text // the tracker's own prompts and continuations never count
     if (ids.length) {
       planTurn = true
       ids.forEach(id => queued.delete(id))
       activePlan = findItem(await read($, tracker), ids[0] ?? -1)?.plan.id ?? activePlan
+      await save($, (t, now) => retarget(t, now, activePlan))
     }
     return next(e)
   })
 
   // The system prompt alone does not get marks mid-turn; a line after the tool result, as a PostToolUse reminder, does.
+  // Subagents' calls count for timing too: a delegated test run is Test. Bash switches before it runs, as a long
+  // test or Codex run belongs to its phase from the start; an edit switches after, once a typed task has its group.
   on('tool.call', async ($, e, next) => {
+    if (e.tool === 'Bash') {
+      const input = e as { command?: unknown; run_in_background?: unknown }
+      const phase = bashPhase(String(input.command ?? ''), isPlanning(await read($, tracker)))
+      if (phase) await enter($, phase, phase !== 'test' && input.run_in_background === true)
+    }
     const r = await next(e)
-    if (e.agentId !== undefined || !WORK.has(e.tool)) return r
-    worked += 1
     if (EDITS.has(e.tool) && r.deny === undefined) {
       const path = String('file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : '')
-      if (PLAN_DOC.test(path)) lastDoc = path
-      // a repo file, not a spec or plan doc, a vault note, a memory file or a plan-mode draft
-      if (prompt && path.startsWith(`${cwd}/`) && !path.includes('/docs/superpowers/')) await trackPrompt($)
+      if (e.agentId === undefined) {
+        if (PLAN_DOC.test(path)) lastDoc = path
+        if (prompt && isRepo(path)) await trackPrompt($)
+      }
+      if (isRepo(path)) await enter($, 'dev')
+      else if (isPlanning(await read($, tracker))) await enter($, 'plan')
     }
+    if (e.agentId !== undefined || !WORK.has(e.tool)) return r
+    worked += 1
     if (r.deny !== undefined || ++sinceMark < REMIND_EVERY) return r
     const open = openItems(await read($, tracker)).filter(i => !isPending(i))
     if (open.length === 0) return r
@@ -461,7 +546,10 @@ export const register: Register = on => {
   // A plan turn audits even without file work: Claude approving then stopping ("I'll start with…") is the hanging case.
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
-    if (e.agentId !== undefined || e.reason !== 'answer' || (worked === 0 && !planTurn)) return r
+    if (e.agentId !== undefined) return r
+    // any end, Esc included: the user has the floor; a background Codex run still counts as Codex
+    await onClock($, (t, now) => (t.clock?.bg && (t.clock.phase === 'review' || t.clock.phase === 'verify') ? t : wait(t, now)))
+    if (e.reason !== 'answer' || (worked === 0 && !planTurn)) return r
     const t = await read($, tracker)
     if (t.busy || !t.plans.some(p => p.items.some(i => i.status !== 'verified'))) return r
     const audit = await verifyAll($, { quiet: true, reply: e.answer })
@@ -469,8 +557,11 @@ export const register: Register = on => {
     return r
   })
 
+  // The approval dialog is the user's time.
   on('tool.call', { tool: 'ExitPlanMode' }, async ($, e, next) => {
+    if (e.agentId === undefined) await onClock($, wait)
     const ran = await next(e)
+    if (e.agentId === undefined) await onClock($, resume)
     // smoke-check only, removed once the rejection shape is confirmed as isError
     $.ui.log(`plan-tracker: ExitPlanMode ${ran.isError ? 'isError' : 'ok'} ${JSON.stringify(ran.result ?? null).slice(0, 160)}`, { to: 'debug' })
     if (e.agentId !== undefined || ran.deny !== undefined || ran.isError) return ran
@@ -479,16 +570,28 @@ export const register: Register = on => {
       const file = result?.filePath ?? ''
       const text = result?.plan ?? (file ? await $.fs.read(file) : '')
       if (text) {
-        const at = await $.clock.now() // before the extraction: its seconds belong to the first item, not to Planning
-        activePlan = await addPlan($, text, file)
+        const at = await $.clock.now() // before the extraction: its seconds are Dev, not Plan
+        const id = await addPlan($, text, file)
+        activePlan = id
         planTurn = true
         prompt = ''
-        await planned($, activePlan, at)
+        if (id) await save($, t => attach(t, at, id))
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
     }
     return ran
+  })
+
+  // A question dialog is the user's time; another plugin's `$.ui.ask` runs this same tool call.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    await onClock($, wait)
+    try {
+      return await next(e)
+    } finally {
+      await onClock($, resume)
+    }
   })
 
   // A superpowers plan doc is tracked when the skill that runs it starts: by then the doc is final.
@@ -500,9 +603,11 @@ export const register: Register = on => {
       const file = found && (found.startsWith('/') ? found : `${cwd}/${found}`)
       const text = file ? await $.fs.read(file) : ''
       if (file && text) {
-        activePlan = await addPlan($, text, file)
+        const id = await addPlan($, text, file)
+        activePlan = id
         planTurn = true
         prompt = ''
+        if (id) await save($, (t, now) => attach(t, now, id))
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -526,11 +631,12 @@ export const register: Register = on => {
     }
     if (found.item.status === 'verified') return { result: `Item #${id} is already verified.` }
     // no model call here: the turn-end audit checks every claim in its one call
-    const now = await $.clock.now()
-    await save($, t => {
+    const main = e.agentId === undefined
+    await save($, (t, now) => {
       const { note: _note, ...item } = found.item
-      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300), doneAt: item.doneAt ?? now }
-      return { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
+      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300) }
+      const next = { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
+      return main ? retarget(next, now, found.plan.id) : next // the clock follows the group Claude works on
     })
     return { result: `Item #${id} noted. The audit at the end of this turn checks it against your tool calls.` }
   })
@@ -575,7 +681,8 @@ export const register: Register = on => {
       $.ui.log(`plan-tracker: placement=${e.props.placement} fullscreen=${String(e.viewport?.isFullscreen)} columns=${String(e.viewport?.columns)} body=${e.props.bodyColumns}`)
     }
     const t = await read($, tracker)
-    const now = t.timing ? await $.clock.now() : 0
+    const shown = await read($, expanded)
+    const now = t.clock ? await $.clock.now() : 0
     const glyph = { open: '○', claimed: '⚠', verified: '✓' } as const
     const color = { open: 'text', claimed: 'warning', verified: 'success' } as const
     const pending = t.plans.flatMap(p => p.items).some(i => i.status !== 'verified')
@@ -590,7 +697,7 @@ export const register: Register = on => {
             <Button key={`work:${item.id}`} plain onPress={() => work($, plan, [item])}>▶</Button>
           )}
           {item.status !== 'verified' && (
-            <Button key={`done:${item.id}`} plain onPress={() => byHand($, item.id)}>✓</Button>
+            <Button key={`done:${item.id}`} plain onPress={() => save($, s => setItem(s, item.id, { status: 'verified', note: 'by you' }))}>✓</Button>
           )}
         </Box>
         {item.status === 'claimed' && item.note !== undefined && (
@@ -601,24 +708,74 @@ export const register: Register = on => {
 
     const verified = (items: PlanItem[]) => items.filter(i => i.status === 'verified').length
 
+    /** `times` with the running clock's live part added when `key` is the one it times. */
+    const live = (key: string, times: Times | undefined): Times | undefined => {
+      const c = t.clock
+      const runs = c !== undefined && (c.group ?? 'pending') === key
+      return runs ? add(times, c.phase, Math.max(0, now - c.since)) : times
+    }
+
+    /** One row per phase with time (`●` on the running one) and Total; nothing for a group never timed. */
+    const phaseRows = (key: string, times: Times | undefined) => {
+      const all = live(key, times)
+      const running = t.clock !== undefined && (t.clock.group ?? 'pending') === key ? t.clock.phase : undefined
+      if (!all || (sum(all) === 0 && running === undefined)) return null
+      const rows = PHASES.filter(([p]) => (all[p] ?? 0) > 0 || p === running)
+      return (
+        <Box flexDirection="column" marginLeft={2}>
+          {rows.map(([p, label]) => (
+            <Box key={`time:${key}:${p}`} flexDirection="row" gap={1}>
+              <Box flexGrow={1}>
+                <Text dimColor={p !== running} wrap="truncate">{label}</Text>
+              </Box>
+              {p === running && <Text color="success">●</Text>}
+              <Text dimColor={p !== running}>{fmt(all[p] ?? 0)}</Text>
+            </Box>
+          ))}
+          <Box key={`time:${key}:total`} flexDirection="row" gap={1}>
+            <Box flexGrow={1}>
+              <Text bold>Total</Text>
+            </Box>
+            <Text bold>{fmt(sum(all))}</Text>
+          </Box>
+        </Box>
+      )
+    }
+
     const group = (plan: PlanGroup, n: number) => {
-      const done = plan.items.length > 0 && plan.items.every(i => i.status === 'verified')
+      const done = isDone(plan)
       const ok = verified(plan.items)
       const filled = plan.items.length ? Math.round((ok / plan.items.length) * 10) : 0
+      const isOpen = shown.includes(plan.id)
+      const total = sum(live(plan.id, plan.time) ?? {})
+      const remove = <Button key={`remove:${plan.id}`} plain dimColor onPress={() => save($, s => ({ ...s, plans: s.plans.filter(p => p.id !== plan.id) }))}>x</Button>
+      if (done) {
+        return (
+          <Box key={`head:${plan.id}`} flexDirection="row" gap={1} marginLeft={2} marginTop={n > 0 ? 1 : 0}>
+            <Box flexGrow={1}>
+              <Text dimColor wrap="truncate">{`✓ ${plan.title}`}</Text>
+            </Box>
+            <Text dimColor>{`${ok}/${plan.items.length}${total > 0 ? ` ${fmt(total)}` : ''}`}</Text>
+            {remove}
+          </Box>
+        )
+      }
       return (
         <Box flexDirection="column" marginLeft={2} marginTop={n > 0 ? 1 : 0}>
-          <Box flexDirection="row" gap={1}>
+          <Box key={`head:${plan.id}`} flexDirection="row" gap={1}>
+            <Button key={`toggle:${plan.id}`} plain onPress={() => toggle($, plan.id)}>{isOpen ? '▾' : '▸'}</Button>
             <Box flexGrow={1}>
-              <Text bold={!done} dimColor={done} wrap="truncate">{`${done ? '✓ ' : ''}${plan.title}`}</Text>
+              <Text bold wrap="truncate">{plan.title}</Text>
             </Box>
             <Text dimColor>{`${'▰'.repeat(filled)}${'▱'.repeat(10 - filled)} ${ok}/${plan.items.length}`}</Text>
-            <Button key={`remove:${plan.id}`} plain dimColor onPress={() => removeGroup($, plan.id)}>x</Button>
+            {remove}
           </Box>
-          {plan.file !== '' && !done && (
+          {phaseRows(plan.id, plan.time)}
+          {plan.note !== undefined && <Text dimColor wrap="truncate">{plan.note}</Text>}
+          {isOpen && plan.file !== '' && (
             <Text dimColor wrap="truncate-start">{plan.file.startsWith(`${cwd}/`) ? plan.file.slice(cwd.length + 1) : plan.file}</Text>
           )}
-          {!done && <Box flexDirection="column" marginLeft={2}>{plan.items.map(item => row(plan, item))}</Box>}
-          {!done && plan.note !== undefined && <Text dimColor wrap="truncate">{plan.note}</Text>}
+          {isOpen && <Box flexDirection="column" marginLeft={2}>{plan.items.map(item => row(plan, item))}</Box>}
           {plan.items.length === 0 && (
             <Button key="extract-again" onPress={() => reextract($, plan)}>{t.busy === 'extract' ? 'extracting…' : 'extract again'}</Button>
           )}
@@ -628,6 +785,12 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        {isPlanning(t) && (
+          <Box key="pending" flexDirection="column">
+            <Text bold>Planning (not approved yet)</Text>
+            {phaseRows('pending', t.pending)}
+          </Box>
+        )}
         {t.plans.length === 0 && (
           <Text dimColor>No plan tracked yet. Run a superpowers plan, approve one in plan mode, or give Claude a task.</Text>
         )}
@@ -649,19 +812,6 @@ export const register: Register = on => {
         })}
         {pending && (
           <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
-        )}
-        {t.timing && (
-          <Box key="time" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
-            <Text bold>TIME</Text>
-            {timeRows(t, t.timing, now).map(([key, label, time, isRunning]) => (
-              <Box key={`time:${key}`} flexDirection="row" gap={1}>
-                <Box flexGrow={1}>
-                  <Text bold={key === 'total'} wrap="truncate">{label}</Text>
-                </Box>
-                <Text bold={isRunning} dimColor={!isRunning}>{time}</Text>
-              </Box>
-            ))}
-          </Box>
         )}
       </Box>
     )
