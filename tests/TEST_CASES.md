@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker`
-last run: 2026-11-18 · ebc22ee+wip (feat/plan-tracker-timing-card) · validate ✔ · feature-tracker 90/90 · plan-tracker 76/76 · git-tracker 24/24
+last run: 2026-11-18 · ebc22ee+wip (feat/plan-tracker-timing-card) · validate ✔ · feature-tracker 90/90 · plan-tracker 77/77 · git-tracker 24/24
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -196,6 +196,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-211 | plan-tracker timing: same plan re-approved never shows a negative time | unit | group with #1 done at T+10s; new run started at T+100s | 1. `ExitPlanMode` approved with the same text 2. render | `#1` row `0s`; no `-` in any duration | plan-tracker/hooks/register.test.ts > same_plan_reapproved_never_shows_negative_time | pass |
 | TC-212 | plan-tracker timing: removed timed group | unit | timed group `p1`, planAt T+90s; now T+3723s | 1. press `x` on the group | no item row; `Planning` `1m 30s`; `Total` frozen at `1m 30s` | plan-tracker/hooks/register.test.ts > removed_timed_group_leaves_planning_and_total | pass |
 | TC-213 | plan-tracker timing: hours format | unit | run started at T; now T+3723s | 1. render | `Total` `1h 02m` | plan-tracker/hooks/register.test.ts > long_run_shows_hours_and_minutes | pass |
+| TC-214 | plan-tracker timing: tick stops when the run ends | unit | live run, #1 claimed; clock at T+200s | 1. clock +3 s 2. press `✓` on #1 3. clock +30 s | 3 redraws while live; `endedAt` set; no redraw after | plan-tracker/hooks/register.test.ts > tick_redraws_each_second_and_stops_when_run_ends | pass |
 
 ## Rules
 

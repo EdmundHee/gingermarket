@@ -84,9 +84,13 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
     toasts: [] as string[],
     opened: [] as string[],
     focused: [] as string[],
+    redraws: 0,
     clock: mock.clock(on),
   }
-  on('ui.invalidate', () => ({ value: undefined }))
+  on('ui.invalidate', () => {
+    seen.redraws += 1
+    return { value: undefined }
+  })
   on('classic.UserPromptSubmit', () => ({}))
   on('state.set', { plugin: 'plan-tracker', key: 'tracker' }, (_$, e, next) => {
     seen.state = e.value as Tracker
@@ -1132,5 +1136,20 @@ describe('plan-tracker', () => {
     await start($, on, timed([[1, 'open']]), [], T + 3723 * SEC)
 
     expect(await timeRow($, 'total')).toContain('1h 02m')
+  })
+
+  test('tick_redraws_each_second_and_stops_when_run_ends', async ($, on) => {
+    const seen = await start($, on, timed([[1, 'claimed', { doneAt: T + 150 * SEC }]]), [], T + 200 * SEC)
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await seen.clock.advance(3 * SEC)
+    const live = seen.redraws
+
+    await pane.press({ key: 'done:1' })
+    const atEnd = seen.redraws
+    await seen.clock.advance(30 * SEC)
+
+    expect(live).toBe(3)
+    expect(seen.state?.timing?.endedAt).toBe(T + 203 * SEC)
+    expect(seen.redraws).toBe(atEnd)
   })
 })
