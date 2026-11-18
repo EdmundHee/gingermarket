@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, ToolUseSummary } from 'claude-code'
 
-import type { PlanGroup, PlanItem, Tracker } from '../types'
+import type { PlanGroup, PlanItem, Timing, Tracker } from '../types'
 
 const PANE = 'plan-tracker'
 const DOCK_COLUMNS = 48 // width when docked beside a fullscreen transcript; inline ignores it
@@ -32,6 +32,7 @@ let storeKey = ''
 let cwd = ''
 let prompt = '' // the typed text of the running turn, until its first repo edit tracks it
 let lastDoc: string | undefined // the plan doc last written this session
+let ticking: { cancel: () => void } | undefined // redraws the timing card each second while a run is live
 
 const EXTRACT =
   "You extract a checklist from an implementation plan or a developer's task request. Return ONLY a JSON array of " +
@@ -82,7 +83,62 @@ async function save($: EngineInterface, change: (t: Tracker) => Tracker) {
   const next = await update($, tracker, change)
   await $.store.set(storeKey, next)
   $.ui.status(status(next))
+  tick($, next)
   return next
+}
+
+const timedGroup = (t: Tracker) => t.plans.find(p => p.id === t.timing?.plan)
+
+/** A run is live until its last item is verified; one whose group was removed has nothing left to time. */
+const isLive = (t: Tracker) =>
+  t.timing !== undefined && t.timing.endedAt === undefined && (t.timing.planAt === undefined || timedGroup(t) !== undefined)
+
+/** Keeps one 1 s redraw going while a run is live, none otherwise. */
+function tick($: EngineInterface, t: Tracker) {
+  if (isLive(t)) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
+  else {
+    ticking?.cancel()
+    ticking = undefined
+  }
+}
+
+/** `patch` on item `id`, stamped with the time it was first marked or verified. */
+const finish = (t: Tracker, id: number, now: number, patch: Partial<PlanItem>): Tracker =>
+  setItem(t, id, { ...patch, doneAt: findItem(t, id)?.item.doneAt ?? now })
+
+/** Ends the run once every item of its group is verified. */
+function ended(t: Tracker, now: number): Tracker {
+  const items = timedGroup(t)?.items ?? []
+  if (!t.timing || t.timing.endedAt !== undefined || items.length === 0 || items.some(i => i.status !== 'verified')) return t
+  return { ...t, timing: { ...t.timing, endedAt: now } }
+}
+
+/** `45s`, `3m 05s`, `1h 02m`; never negative. */
+function fmt(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  const two = (n: number) => String(n).padStart(2, '0')
+  if (s < 60) return `${s}s`
+  return s < 3600 ? `${Math.floor(s / 60)}m ${two(s % 60)}s` : `${Math.floor(s / 3600)}h ${two(Math.floor((s % 3600) / 60))}m`
+}
+
+/** The timing card's rows as [key, label, time, isRunning]: Planning, the timed group's items, Total. */
+function timeRows(t: Tracker, timing: Timing, now: number): Array<[string, string, string, boolean]> {
+  const items = timedGroup(t)?.items ?? []
+  const approved = timing.planAt !== undefined
+  const marks = [timing.planAt ?? timing.startedAt, ...items.flatMap(i => (i.doneAt === undefined ? [] : [i.doneAt]))]
+  const last = Math.max(...marks)
+  const next = items.find(i => i.doneAt === undefined && i.status !== 'verified') // ponytail: list order; out-of-order work shows its running time on this row until marked
+  const glyph = { open: '○', claimed: '⚠', verified: '✓' } as const
+  const end = timing.endedAt ?? (approved && items.length === 0 && !timedGroup(t) ? timing.planAt ?? now : now)
+  return [
+    ['planning', 'Planning', fmt((timing.planAt ?? now) - timing.startedAt), !approved],
+    ...items.map((i): [string, string, string, boolean] => {
+      const label = `${glyph[i.status]} #${i.id} ${i.text}`
+      if (i.doneAt !== undefined) return [`item:${i.id}`, label, fmt(i.doneAt - Math.max(...marks.filter(m => m < (i.doneAt ?? 0)), timing.planAt ?? timing.startedAt)), false]
+      return i === next ? [`item:${i.id}`, label, fmt(now - last), true] : [`item:${i.id}`, label, '–', false]
+    }),
+    ['total', 'Total', fmt(end - timing.startedAt), isLive(t)],
+  ]
 }
 
 const setItem = (t: Tracker, id: number, patch: Partial<PlanItem>): Tracker => ({
@@ -225,6 +281,19 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
   $.ui.toast(`sent ${ids}`)
 }
 
+/** The `✓` button: verified by the user. */
+async function byHand($: EngineInterface, id: number) {
+  const now = await $.clock.now()
+  await save($, t => ended(finish(t, id, now, { status: 'verified', note: 'by you' }), now))
+}
+
+/** The plan's approval ends Planning; with no plan-mode prompt seen, the run starts here. */
+async function planned($: EngineInterface, plan: string | undefined) {
+  if (!plan) return
+  const now = await $.clock.now()
+  await save($, t => (t.timing && t.timing.planAt === undefined ? { ...t, timing: { ...t.timing, planAt: now, plan } } : t.timing ? t : { ...t, timing: { startedAt: now, planAt: now, plan } }))
+}
+
 /** A session's start, or a /clear (no session.start, $.state back to EMPTY): turn state reset, store loaded. */
 async function load($: EngineInterface) {
   planTurn = false
@@ -235,6 +304,9 @@ async function load($: EngineInterface) {
   const { busy: _busy, ...stored } = ((await $.store.get(storeKey)) as Tracker | undefined) ?? EMPTY
   await update($, tracker, () => stored)
   $.ui.status(status(stored))
+  ticking?.cancel() // a /clear drops the old session's timer
+  ticking = undefined
+  tick($, stored)
   void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS })
 }
 
@@ -252,14 +324,15 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
   const answer = await ask($, 'sonnet', AUDIT, prompt, 4096)
   const audit = isAudit(answer) ? answer : undefined
   const verdicts = audit?.items.filter(isVerdict) ?? []
+  const now = await $.clock.now()
   const after = await save($, ({ busy: _busy, ...t }) => {
     let next: Tracker = t
     for (const v of verdicts) {
       const found = findItem(next, Number(v.id))
       if (!found || found.item.status === 'verified') continue
-      next = setItem(next, found.item.id, v.verdict === 'verified' ? { status: 'verified', note: v.reason } : { note: v.reason })
+      next = v.verdict === 'verified' ? finish(next, found.item.id, now, { status: 'verified', note: v.reason }) : setItem(next, found.item.id, { note: v.reason })
     }
-    return next
+    return ended(next, now)
   })
   const newly = verdicts.filter(v => v.verdict === 'verified' && pending.some(i => i.id === Number(v.id))).map(v => `#${v.id}`)
   if (opts.quiet) {
@@ -314,6 +387,18 @@ export const register: Register = on => {
   // /clear starts a new session id with no session.start; unloaded, the next save would write EMPTY over the store
   on('classic.SessionStart', async ($, e, next) => {
     if (e.source === 'clear') await load($)
+    return next(e)
+  })
+
+  // No event marks the plan-mode toggle itself; the first prompt sent in plan mode is the earliest sign of it.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const t = await read($, tracker)
+    if (e.permission_mode === 'plan' && (!t.timing || t.timing.planAt !== undefined)) {
+      const startedAt = await $.clock.now()
+      await save($, s => ({ ...s, timing: { startedAt } }))
+      // focus is a request: the engine gives the keys only over an empty composer, with no dialog up
+      void $.ui.open({ id: PANE, title: 'Plan', columns: DOCK_COLUMNS, focus: true })
+    }
     return next(e)
   })
 
@@ -383,6 +468,7 @@ export const register: Register = on => {
         activePlan = await addPlan($, text, file)
         planTurn = true
         prompt = ''
+        await planned($, activePlan)
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -425,9 +511,10 @@ export const register: Register = on => {
     }
     if (found.item.status === 'verified') return { result: `Item #${id} is already verified.` }
     // no model call here: the turn-end audit checks every claim in its one call
+    const now = await $.clock.now()
     await save($, t => {
       const { note: _note, ...item } = found.item
-      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300) }
+      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300), doneAt: item.doneAt ?? now }
       return { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
     })
     return { result: `Item #${id} noted. The audit at the end of this turn checks it against your tool calls.` }
@@ -473,13 +560,7 @@ export const register: Register = on => {
       $.ui.log(`plan-tracker: placement=${e.props.placement} fullscreen=${String(e.viewport?.isFullscreen)} columns=${String(e.viewport?.columns)} body=${e.props.bodyColumns}`)
     }
     const t = await read($, tracker)
-    if (t.plans.length === 0) {
-      return (
-        <Box flexDirection="column">
-          <Text dimColor>No plan tracked yet. Run a superpowers plan, approve one in plan mode, or give Claude a task.</Text>
-        </Box>
-      )
-    }
+    const now = t.timing ? await $.clock.now() : 0
     const glyph = { open: '○', claimed: '⚠', verified: '✓' } as const
     const color = { open: 'text', claimed: 'warning', verified: 'success' } as const
     const pending = t.plans.flatMap(p => p.items).some(i => i.status !== 'verified')
@@ -494,7 +575,7 @@ export const register: Register = on => {
             <Button key={`work:${item.id}`} plain onPress={() => work($, plan, [item])}>▶</Button>
           )}
           {item.status !== 'verified' && (
-            <Button key={`done:${item.id}`} plain onPress={() => save($, s => setItem(s, item.id, { status: 'verified', note: 'by you' }))}>✓</Button>
+            <Button key={`done:${item.id}`} plain onPress={() => byHand($, item.id)}>✓</Button>
           )}
         </Box>
         {item.status === 'claimed' && item.note !== undefined && (
@@ -532,6 +613,9 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column" gap={1}>
+        {t.plans.length === 0 && (
+          <Text dimColor>No plan tracked yet. Run a superpowers plan, approve one in plan mode, or give Claude a task.</Text>
+        )}
         {SOURCES.map(([source, label]) => {
           const plans = t.plans.filter(p => sourceOf(p) === source)
           if (plans.length === 0) return null
@@ -550,6 +634,19 @@ export const register: Register = on => {
         })}
         {pending && (
           <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
+        )}
+        {t.timing && (
+          <Box key="time" flexDirection="column" borderStyle="round" borderColor="subtle" paddingX={1}>
+            <Text bold>TIME</Text>
+            {timeRows(t, t.timing, now).map(([key, label, time, isRunning]) => (
+              <Box key={`time:${key}`} flexDirection="row" gap={1}>
+                <Box flexGrow={1}>
+                  <Text bold={key === 'total'} wrap="truncate">{label}</Text>
+                </Box>
+                <Text bold={isRunning} dimColor={!isRunning}>{time}</Text>
+              </Box>
+            ))}
+          </Box>
         )}
       </Box>
     )

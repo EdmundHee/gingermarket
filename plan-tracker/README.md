@@ -56,6 +56,14 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - Every third file edit, command or subagent dispatch while items are open adds one reminder line to the tool result,
   which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
   restarts the count, so marks land as the work does, not at the end of the turn.
+- **Timing.** The first prompt you send in plan mode opens the pane with the keyboard on it and starts a
+  clock. (Nothing tells a mod the moment you toggle plan mode, so the prompt is the earliest sign; the
+  focus is a request the engine may refuse, e.g. over text in the composer.) A `TIME` card at the bottom
+  of the pane shows wall-clock time, waiting on you included: `Planning` (that prompt → the plan's
+  approval), one row per item of that plan (the time since the previous mark, frozen at its first
+  `mark_done` or `✓`; the first unmarked item in list order shows the running time), and `Total`, which
+  stops when the last item is verified. Follow-up prompts while planning keep the clock; a plan-mode
+  prompt after an approval starts a new run and replaces the card. `/clear` and a new session keep the run.
 - `▶` twice queues once. Pull a queued prompt back with **Up** in an empty composer; its items
   stay `already queued` until `/clear` or a new session.
 
