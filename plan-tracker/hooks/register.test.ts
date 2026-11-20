@@ -1231,6 +1231,7 @@ describe('plan-tracker', () => {
     await seen.clock.advance(20 * SEC)
 
     expect(seen.state?.clock?.group).toBeUndefined()
+    expect(seen.state?.plans).toEqual([])
     const plan = await timeRow($, 'pending', 'plan')
     expect(plan).toContain('●')
     expect(plan).toMatch(/(^|\D)50s$/)
