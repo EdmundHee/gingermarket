@@ -176,20 +176,25 @@ async function liveFor($: EngineInterface, command: string, dir: string): Promis
 
 const norm = (s: string) => s.trim().replace(/\s+/g, ' ')
 
-/** Full: one of the run: line's commands. Focused: exactly one pytest node or one TC id. Branch: anything else. */
+/** Full: one of the run: line's commands. Focused: the command names one test and nothing else to run: one pytest
+ *  node and no other test file, or one TC id and at most its one script. Branch: anything else. */
 // ponytail: -k / -t / --grep may pick many tests, so they guess branch; Claude's scope says focused for those
 function guess(command: string, runLines: string[]): Scope {
   if (runLines.some(r => norm(r) === norm(command))) return 'full'
-  const nodes = command.match(/\S+::\S+/g) ?? []
+  const words = command.split(/\s+/)
+  const nodes = words.filter(w => w.includes('::'))
+  const files = words.filter(w => !w.includes('::') && /\.(py|[cm]?[jt]sx?)$/.test(w))
   const tcs = new Set(command.match(/TC-\d+/g) ?? [])
-  return nodes.length === 1 || (nodes.length === 0 && tcs.size === 1) ? 'focused' : 'branch'
+  const isOne = (nodes.length === 1 && files.length === 0) || (nodes.length === 0 && files.length <= 1 && tcs.size === 1)
+  return isOne ? 'focused' : 'branch'
 }
 
 /** Claude's scope when it is one of the three, else the guess; a said `full` that is not a run: command is flagged. */
 function scopeOf(said: unknown, command: string, runLines: string[]): Pick<Run, 'scope' | 'scopeNote'> {
   const guessed = guess(command, runLines)
   const scope = SCOPES.find(s => s === said) ?? guessed
-  return scope === 'full' && guessed !== 'full' && runLines.length > 0 ? { scope, scopeNote: 'not the run: line' } : { scope }
+  if (scope !== 'full' || guessed === 'full') return { scope }
+  return { scope, scopeNote: runLines.length > 0 ? 'not the run: line' : 'no run: line to check' }
 }
 
 /** Keeps a line for the result; passing-test lines are the bulk of a log and tell Claude nothing. */
@@ -810,7 +815,9 @@ export const register: Register = on => {
                   <Text wrap="truncate">
                     {`Last ${sc.padEnd(8)} `}
                     <Text color={color}>{icon}</Text>
-                    <Text dimColor>{` ${l.counts.pass}/${l.counts.pass + l.counts.fail}   ${ago(now - l.endedAt)} ago`}</Text>
+                    <Text dimColor>
+                      {` ${l.counts.pass}/${l.counts.pass + l.counts.fail}${l.counts.skip > 0 ? `  ○ ${l.counts.skip}` : ''}   ${ago(now - l.endedAt)} ago`}
+                    </Text>
                   </Text>
                 </Box>
               )

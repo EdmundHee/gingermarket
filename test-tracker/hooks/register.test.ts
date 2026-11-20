@@ -1182,3 +1182,43 @@ describe('test-tracker smoke findings', () => {
     expect(await textOf(pane, 'stat:1')).toContain('✗ 1')
   })
 })
+
+describe('test-tracker acceptance findings', () => {
+  test('card_scope_one_node_plus_another_target_is_branch', async ($, on) => {
+    const quick = { pieces: ['(pass) s > a [1ms]\n'] }
+    const seen = await start($, on, { scripts: { 'pytest t.py::test_a other.py': quick, 'sh run.sh tests/screen/TC-012.mjs tests/screen/TC-013.mjs': quick } })
+    const pane = await mount($)
+
+    await run($, 'pytest t.py::test_a other.py')
+    await seen.settle()
+    const nodePlusFile = await textOf(pane, 'card:head')
+    await run($, 'sh run.sh tests/screen/TC-012.mjs tests/screen/TC-013.mjs')
+    await seen.settle()
+    const twoScripts = await textOf(pane, 'card:head')
+
+    expect(nodePlusFile).toContain('Branch tests')
+    expect(twoScripts).toContain('Branch tests')
+  })
+
+  test('card_flags_full_scope_with_no_run_line_to_check', async ($, on) => {
+    const seen = await start($, on, { scripts: { 'bun test': { pieces: ['(pass) s > a [1ms]\n'] } } })
+
+    await run($, 'bun test', undefined, 'full')
+    await seen.settle()
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:head')).toContain('Full suite')
+    expect(await textOf(pane, 'card:head')).toContain('no run: line to check')
+  })
+
+  test('card_last_line_shows_skipped_tests', async ($, on) => {
+    const seen = await start($, on, { scripts: { 'bun test': { pieces: ['(pass) s > a [1ms]\n(skip) s > b\n'] } } })
+
+    await run($, 'bun test', undefined, 'full')
+    await seen.settle()
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:last:full')).toContain('1/1')
+    expect(await textOf(pane, 'card:last:full')).toContain('○ 1')
+  })
+})
