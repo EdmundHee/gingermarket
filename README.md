@@ -24,6 +24,7 @@ On Claude Code 2.1.275 or later, one step does both: `/plugin install <name> --m
 | [**plan-tracker**](plan-tracker/README.md) | Plan tracker pane: items of every approved plan, Claude marks them done, sonnet audits the marks at every turn end, leftovers of a plan turn are sent back to Claude on their own. | Nothing. Costs one sonnet call per turn that touched files, one opus call per plan approved or task typed ([cost](plan-tracker/README.md#cost)) | `/plugin install plan-tracker@gingermarket` |
 | [**git-tracker**](git-tracker/README.md) | Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists. | git; `gh` for the PR row | `/plugin install git-tracker@gingermarket` |
 | [**feature-tracker**](feature-tracker/README.md) | Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security, improvements) logged as checkbox notes in Obsidian or docs/features/, with each finding listed in the pane to pick and plan. | Optional `notesDir` setting (an Obsidian folder) | `/plugin install feature-tracker@gingermarket` |
+| [**test-tracker**](test-tracker/README.md) | Tests pane beside plan-tracker: every test run as it happens, each test ticked pass or fail live with its TC id, the test running now, elapsed time and the last five runs; Claude runs tests through its run_tests tool, plain Bash test commands show their results at the end. | Nothing | `/plugin install test-tracker@gingermarket` |
 
 ## What each plugin runs and writes
 
@@ -31,6 +32,7 @@ On Claude Code 2.1.275 or later, one step does both: `/plugin install <name> --m
 - **plan-tracker**: loads `hooks/register.tsx` into Claude Code. Makes opus calls (item extraction) and sonnet calls (checks), submits prompts on its own to send leftover items back, keeps its tracker in the plugin store.
 - **git-tracker**: loads `hooks/register.tsx`. Runs read-only `git` and `gh` commands after each edit or Bash call. Writes nothing.
 - **feature-tracker**: loads `hooks/register.tsx`. Runs `git`, spawns a read-only opus reader, writes `features.md` and review notes to `docs/features/` or `notesDir`. Plan N selected and ▶ submit a prompt.
+- **test-tracker**: loads `hooks/register.tsx`. Its `run_tests` tool runs the test command it is given with `/bin/sh -c` (after the permission check, as Bash), reads `tests/TEST_CASES.md`. Writes nothing to disk.
 
 ## Adding Plugins
 

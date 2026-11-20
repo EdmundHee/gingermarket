@@ -11,8 +11,10 @@ const tracker = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, EMPTY)
 /** Ids of the groups whose items are shown; every group starts collapsed. Not stored: a session's view only. */
 const expanded = atom({ plugin: 'plan-tracker', key: 'expanded' } as const, [] as string[])
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
+/** test-tracker's tool: a test run moved off Bash still counts as Test time and as work. */
+const RUN_TESTS = 'mcp__test-tracker__run_tests'
 /** Tools whose call could finish an item; a turn with none ends without an audit. Agent: subagent-driven runs. */
-const WORK = new Set([...EDITS, 'Bash', 'Agent'])
+const WORK = new Set([...EDITS, 'Bash', 'Agent', RUN_TESTS])
 /** Skills that run a superpowers plan doc; their start is the doc's approval. */
 const EXECUTE = /(^|:)(executing-plans|subagent-driven-development)$/
 const DOCS = 'docs/superpowers/plans'
@@ -525,7 +527,7 @@ export const register: Register = on => {
       const input = e as { command?: unknown; run_in_background?: unknown }
       const phase = bashPhase(String(input.command ?? ''), isPlanning(await read($, tracker)))
       if (phase) await enter($, phase, phase !== 'test' && input.run_in_background === true)
-    }
+    } else if (String(e.tool) === RUN_TESTS) await enter($, 'test', false)
     const r = await next(e)
     if (EDITS.has(e.tool) && r.deny === undefined) {
       const path = String('file_path' in e ? e.file_path : 'notebook_path' in e ? e.notebook_path : '')

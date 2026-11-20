@@ -1070,6 +1070,23 @@ describe('plan-tracker', () => {
     expect(seen.state?.clock?.phase).toBe('dev')
   })
 
+  test('test_tracker_run_counts_as_test_work', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'tests ran']], 'done'))
+    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, () => ({ result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }))
+    // two items: verifying the last one would stop the clock and hide the time card
+    const seen = await start($, on, clocked([[1, 'open'], [2, 'open']], 'dev'), [], T)
+
+    await seen.clock.advance(10 * SEC)
+    await $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q' } as never)
+    const phase = seen.state?.clock?.phase
+    await seen.clock.advance(5 * SEC)
+    await endTurn($)
+
+    expect(phase).toBe('test')
+    expect(await timeRow($, 'p1', 'test')).toMatch(/(^|\D)5s$/)
+    expect(calls.n).toBe(1)
+  })
+
   test('acceptance_is_codex_verify_then_edits_are_review_fixes', async ($, on) => {
     const seen = await start($, on, clocked([[1, 'open']], 'test'), [], T)
 
