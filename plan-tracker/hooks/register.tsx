@@ -41,7 +41,7 @@ let turnAt = 0 // when the running main turn started: a typed task's clock start
 /** The pane's phase rows, in order. */
 const PHASES: ReadonlyArray<readonly [Phase, string]> = [
   ['plan', 'Plan'], ['review', 'Codex review'], ['dev', 'Dev'], ['fixes', 'Review fixes'],
-  ['test', 'Test'], ['verify', 'Codex verify'], ['waiting', 'Waiting'],
+  ['test', 'Test'], ['verify', 'Codex verify'],
 ]
 const CODEX = /\bcodex\s+exec\b/
 // ponytail: phase from the command text; a test behind a script name (`make check`) switches nothing, add a pattern when it matters
@@ -112,9 +112,12 @@ const isPlanning = (t: Tracker) => t.clock !== undefined && t.clock.group === un
 /** A repo file, not a spec or plan doc, a vault note, a memory file or a plan-mode draft. */
 const isRepo = (path: string) => path.startsWith(`${cwd}/`) && !path.includes('/docs/superpowers/')
 
-/** Keeps one 1 s redraw going while a clock runs, none otherwise. */
+/** The user has the floor: the clock is paused and nothing counts. */
+const paused = (c?: Clock) => c?.phase === 'waiting'
+
+/** Keeps one 1 s redraw going while a clock runs, none otherwise (paused included). */
 function tick($: EngineInterface, t: Tracker) {
-  if (t.clock) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
+  if (t.clock && !paused(t.clock)) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
   else {
     ticking?.cancel()
     ticking = undefined
@@ -122,14 +125,16 @@ function tick($: EngineInterface, t: Tracker) {
 }
 
 const add = (times: Times | undefined, phase: Phase, ms: number): Times => ({ ...times, [phase]: (times?.[phase] ?? 0) + ms })
-const sum = (times: Times) => Object.values(times).reduce((a, b) => a + (b ?? 0), 0)
+/** The shown phases only: a 0.4.6 store's `waiting` bucket stays out of every total. */
+const sum = (times: Times) => PHASES.reduce((a, [p]) => a + (times[p] ?? 0), 0)
 
-/** The time since the clock's last move lands in its phase: `pending`, or its group's `time` (dropped when that group is gone). */
+/** The time since the clock's last move lands in its phase: `pending`, or its group's `time` (dropped when that group is gone). Paused time lands nowhere. */
 function flush(t: Tracker, now: number): Tracker {
   const c = t.clock
   if (!c) return t
   const ms = Math.max(0, now - c.since)
   const clock: Clock = { ...c, since: Math.max(now, c.since) }
+  if (paused(c)) return { ...t, clock }
   if (c.group === undefined) return { ...t, clock, pending: add(t.pending, c.phase, ms) }
   return { ...t, clock, plans: t.plans.map(p => (p.id === c.group ? { ...p, time: add(p.time, c.phase, ms) } : p)) }
 }
@@ -142,15 +147,15 @@ function switchTo(t: Tracker, now: number, phase: Phase, group?: string): Tracke
   return { ...next, clock: { ...clock, phase, ...(group === undefined ? {} : { group }) } }
 }
 
-/** Waiting on the user; `resume` keeps the phase to go back to. */
+/** Paused while the user has the floor; nothing counts. `resume` keeps the phase to go back to. */
 function wait(t: Tracker, now: number): Tracker {
-  if (!t.clock || t.clock.phase === 'waiting') return t
+  if (!t.clock || paused(t.clock)) return t
   const next = switchTo(t, now, 'waiting')
   return { ...next, clock: { ...(next.clock ?? t.clock), resume: t.clock.phase } }
 }
 
-/** Back from Waiting to the phase before it. */
-const resume = (t: Tracker, now: number): Tracker => (t.clock?.phase === 'waiting' ? switchTo(t, now, t.clock.resume ?? 'dev') : t)
+/** Back from a pause to the phase before it. */
+const resume = (t: Tracker, now: number): Tracker => (t.clock && paused(t.clock) ? switchTo(t, now, t.clock.resume ?? 'dev') : t)
 
 /** Starts timing group `id` at `at`, never before the clock's last move; a planning run's buckets move into it. */
 function attach(t: Tracker, at: number, id: string, phase: Phase = 'dev'): Tracker {
@@ -587,13 +592,15 @@ export const register: Register = on => {
   })
 
   // A question dialog is the user's time; another plugin's `$.ui.ask` runs this same tool call.
+  // One asked while already paused (the reset confirm, an idle `$.ui.ask`) leaves the pause alone.
   on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
-    await onClock($, wait)
+    const idle = paused((await read($, tracker)).clock)
+    if (!idle) await onClock($, wait)
     try {
       return await next(e)
     } finally {
-      await onClock($, resume)
+      if (!idle) await onClock($, resume)
     }
   })
 

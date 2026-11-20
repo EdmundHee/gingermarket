@@ -1085,7 +1085,7 @@ describe('plan-tracker', () => {
     expect(fixes).toMatch(/(^|\D)15s$/)
   })
 
-  test('turn_end_is_waiting_and_next_turn_resumes', async ($, on) => {
+  test('turn_end_pauses_the_clock_and_next_turn_resumes', async ($, on) => {
     const seen = await start($, on, clocked([[1, 'open']], 'dev'), [], T)
 
     await endTurn($)
@@ -1093,10 +1093,12 @@ describe('plan-tracker', () => {
     await $.turn.start({ text: 'carry on', turnId: 't3' })
     await seen.clock.advance(5 * SEC)
 
-    expect(await timeRow($, 'p1', 'waiting')).toContain('2m 00s')
     const dev = await timeRow($, 'p1', 'dev')
     expect(dev).toContain('●')
     expect(dev).toMatch(/(^|\D)5s$/)
+    expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)5s$/)
+    expect(await timeRow($, 'p1', 'waiting')).toBeUndefined()
+    expect(seen.state?.plans[0]?.time?.waiting).toBeUndefined()
   })
 
   test('background_codex_keeps_counting_through_turn_end', async ($, on) => {
@@ -1111,7 +1113,9 @@ describe('plan-tracker', () => {
     await seen.clock.advance(60 * SEC)
 
     expect(await timeRow($, 'pending', 'review')).toContain('3m 00s')
-    expect(await timeRow($, 'pending', 'waiting')).toContain('1m 00s')
+    expect(await timeRow($, 'pending', 'total')).toContain('3m 00s')
+    expect(await timeRow($, 'pending', 'waiting')).toBeUndefined()
+    expect(seen.state?.pending?.waiting).toBeUndefined()
   })
 
   test('typed_prompt_while_background_codex_runs_ends_its_codex_time', async ($, on) => {
@@ -1132,7 +1136,7 @@ describe('plan-tracker', () => {
     expect(plan).toContain('1m 00s')
   })
 
-  test('dialog_time_is_waiting', async ($, on) => {
+  test('dialog_time_is_not_counted', async ($, on) => {
     const late: { advance?: (ms: number) => Promise<void> } = {} // the clock exists only once start() has run
     on('tool.call', { tool: 'AskUserQuestion' }, async (_$, e) => {
       await late.advance?.(40 * SEC)
@@ -1147,10 +1151,12 @@ describe('plan-tracker', () => {
     } as never)
     await seen.clock.advance(5 * SEC)
 
-    expect(await timeRow($, 'p1', 'waiting')).toMatch(/(^|\D)40s$/)
     const dev = await timeRow($, 'p1', 'dev')
     expect(dev).toContain('●')
     expect(dev).toMatch(/(^|\D)5s$/)
+    expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)5s$/)
+    expect(await timeRow($, 'p1', 'waiting')).toBeUndefined()
+    expect(seen.state?.plans[0]?.time?.waiting).toBeUndefined()
   })
 
   test('last_item_verified_stops_the_clock', async ($, on) => {
@@ -1210,7 +1216,7 @@ describe('plan-tracker', () => {
     expect(await timeRow($, id, 'dev')).toMatch(/(^|\D)10s$/)
   })
 
-  test('rejected_plan_keeps_planning_and_counts_the_dialog_as_waiting', async ($, on) => {
+  test('rejected_plan_keeps_planning_and_skips_the_dialog_time', async ($, on) => {
     const late: { advance?: (ms: number) => Promise<void> } = {}
     on('tool.call', { tool: 'ExitPlanMode' }, async () => {
       await late.advance?.(30 * SEC) // the user reads the plan, then rejects it
@@ -1228,7 +1234,8 @@ describe('plan-tracker', () => {
     const plan = await timeRow($, 'pending', 'plan')
     expect(plan).toContain('●')
     expect(plan).toMatch(/(^|\D)50s$/)
-    expect(await timeRow($, 'pending', 'waiting')).toMatch(/(^|\D)30s$/)
+    expect(await timeRow($, 'pending', 'waiting')).toBeUndefined()
+    expect(seen.state?.pending?.waiting).toBeUndefined()
   })
 
   test('removed_group_stops_the_clock', async ($, on) => {
@@ -1442,5 +1449,107 @@ describe('plan-tracker', () => {
 
     expect(await timeRow($, 'p1', 'total')).toBeUndefined()
     expect(await timeRow($, 'p1', 'dev')).toBeUndefined()
+  })
+
+  test('stored_waiting_bucket_is_left_out_of_total', async ($, on) => {
+    const base = seeded([[1, 'open']])
+    await start($, on, { ...base, plans: base.plans.map(p => ({ ...p, time: { dev: 10 * SEC, waiting: 60 * SEC } })) })
+
+    const total = await timeRow($, 'p1', 'total')
+
+    expect(await timeRow($, 'p1', 'dev')).toMatch(/(^|\D)10s$/)
+    expect(total).toMatch(/(^|\D)10s$/)
+    expect(await timeRow($, 'p1', 'waiting')).toBeUndefined()
+  })
+
+  test('paused_clock_stops_redrawing', async ($, on) => {
+    const seen = await start($, on, clocked([[1, 'open']], 'dev'), [], T + 10 * SEC)
+    await endTurn($)
+    const atPause = seen.redraws
+
+    await seen.clock.advance(30 * SEC)
+
+    expect(seen.redraws).toBe(atPause)
+    const dev = await timeRow($, 'p1', 'dev')
+    expect(dev).not.toContain('●')
+    expect(dev).toMatch(/(^|\D)10s$/)
+    expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)10s$/)
+  })
+
+  test('approval_dialog_time_is_not_counted', async ($, on) => {
+    opus(on, () => '["edit a", "test b"]')
+    const late: { advance?: (ms: number) => Promise<void> } = {}
+    on('tool.call', { tool: 'ExitPlanMode' }, async () => {
+      await late.advance?.(40 * SEC) // the user reads the plan, then approves it
+      return { result: { plan: PLAN, isAgent: false, filePath: '/tmp/plan.md' }, text: 'User has approved your plan.' }
+    })
+    const seen = await start($, on, undefined, [], T)
+    late.advance = seen.clock.advance
+    await planPrompt($)
+
+    await seen.clock.advance(90 * SEC)
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await seen.clock.advance(60 * SEC)
+
+    const id = seen.state?.plans[0]?.id ?? ''
+    expect(await timeRow($, id, 'plan')).toContain('1m 30s')
+    const dev = await timeRow($, id, 'dev')
+    expect(dev).toContain('●')
+    expect(dev).toContain('1m 00s')
+    expect(await timeRow($, id, 'total')).toContain('2m 30s')
+  })
+
+  test('stored_paused_clock_resumes_without_the_gap', async ($, on) => {
+    const stored = clocked([[1, 'open']], 'waiting', T, { dev: 10 * SEC })
+    const seen = await start($, on, { ...stored, clock: { ...stored.clock!, resume: 'dev' } }, [], T + 300 * SEC)
+
+    await $.turn.start({ text: 'carry on', turnId: 't3' })
+    await seen.clock.advance(5 * SEC)
+
+    const dev = await timeRow($, 'p1', 'dev')
+    expect(dev).toContain('●')
+    expect(dev).toMatch(/(^|\D)15s$/)
+    expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)15s$/)
+    expect(await timeRow($, 'p1', 'waiting')).toBeUndefined()
+  })
+
+  test('verified_line_leaves_out_stored_waiting', async ($, on) => {
+    const base = seeded([[1, 'verified'], [2, 'verified']])
+    await start($, on, { ...base, plans: base.plans.map(p => ({ ...p, time: { dev: 180 * SEC, waiting: 120 * SEC } })) })
+
+    const head = await textOf($, 'head:p1')
+
+    expect(head).toContain('2/2 3m 00s')
+  })
+
+  test('approval_drops_stored_pending_waiting', async ($, on) => {
+    opus(on, () => '["edit a"]')
+    approved(on)
+    const stored: Tracker = { nextId: 1, plans: [], pending: { plan: 30 * SEC, waiting: 60 * SEC }, clock: { phase: 'plan', since: T, session: 's1' } }
+    const seen = await start($, on, stored, [], T)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+    await seen.clock.advance(10 * SEC)
+
+    const id = seen.state?.plans[0]?.id ?? ''
+    expect(await timeRow($, id, 'plan')).toMatch(/(^|\D)30s$/)
+    const dev = await timeRow($, id, 'dev')
+    expect(dev).toContain('●')
+    expect(dev).toMatch(/(^|\D)10s$/)
+    expect(await timeRow($, id, 'total')).toMatch(/(^|\D)40s$/)
+    expect(await timeRow($, id, 'waiting')).toBeUndefined()
+  })
+
+  test('idle_dialog_keeps_the_clock_paused', async ($, on) => {
+    asked(on, 'Keep')
+    const seen = await start($, on, clocked([[1, 'open']], 'dev'), [], T + 10 * SEC)
+    await endTurn($)
+
+    await command($, 'reset')
+    await seen.clock.advance(60 * SEC)
+
+    expect(seen.state?.plans[0]?.time?.dev).toBe(10 * SEC)
+    expect(seen.state?.clock?.phase).toBe('waiting')
+    expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)10s$/)
   })
 })

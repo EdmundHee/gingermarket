@@ -65,8 +65,9 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   - **Dev**: from the approval, and every repo-file edit; **Review fixes** once a Codex verify has run for that group.
   - **Test**: `claude plugin test|validate`, `npm|pnpm|yarn|bun test`, `pytest`, `vitest`, `jest`, `go|cargo test`,
     `tests/screen/`, `tmux send-keys|capture-pane`. Other Bash (git, grep) switches nothing.
-  - **Waiting**: from the end of each turn until the next one, and while a question or plan-approval dialog is
-    up. A Codex run launched in the background keeps counting as Codex until the turn its result starts.
+  - **Not counted**: from the end of each turn until the next one, and while a question or plan-approval dialog
+    is up, the clock pauses. A Codex run launched in the background keeps counting as Codex until the turn its
+    result starts.
   Before approval the time sits in a `Planning (not approved yet)` block at the top and moves into the group
   on approval. A typed task counts from its prompt, a plan doc from the skill start. The clock follows the
   group Claude marks or works on, and stops when that group's last item is verified or the group is removed.
