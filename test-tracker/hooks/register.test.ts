@@ -246,11 +246,12 @@ describe('test-tracker', () => {
     const pane = await mount($)
     const during = await textOf(pane, 'stat:1')
     rest.release('TC-012: FAIL\n')
-    await call
+    const result = resultOf(await call)
     await seen.settle()
 
     expect(during).toContain('now: tests/screen/TC-012.mjs')
     expect(await textOf(pane, 'row:1:0')).toContain('✗ TC-012 login')
+    expect(result).toContain('failed: TC-012 login')
   })
 
   test('test_rows_get_tc_ids_from_code_test_column', async ($, on) => {

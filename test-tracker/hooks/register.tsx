@@ -229,7 +229,7 @@ function report(run: Run | undefined, live: Live) {
   const c = run.counts
   const secs = (((run.endedAt ?? run.startedAt) - run.startedAt) / 1000).toFixed(1)
   const head = run.exit === 'error' ? `run_tests: ${run.error ?? 'failed'}` : run.exit === 'stopped' ? 'stopped' : `exit ${run.exit}`
-  const fails = run.tests.filter(t => t.status === 'fail').map(t => (t.tc ? `${t.tc} ${t.name}` : t.name))
+  const fails = run.tests.filter(t => t.status === 'fail').map(label)
   const out = live.kept.join('\n')
   const tail = out.length > RESULT_MAX ? `… ${out.length - RESULT_MAX} earlier characters cut\n${out.slice(-RESULT_MAX)}` : out
   return [
