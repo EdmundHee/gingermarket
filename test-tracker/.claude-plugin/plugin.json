@@ -1,0 +1,8 @@
+{
+  "name": "test-tracker",
+  "version": "0.1.0",
+  "description": "Tests pane beside plan-tracker: every test run as it happens, each test ticked pass or fail live with its TC id, the test running now, elapsed time and the last five runs; Claude runs tests through its run_tests tool, plain Bash test commands show their results at the end.",
+  "author": { "name": "Edmund Hee" },
+  "license": "MIT",
+  "types": "./types/index.d.ts"
+}
