@@ -6,6 +6,7 @@ export type Scope = 'focused' | 'branch' | 'full'
 export type TestRow = {
   name: string
   status: Status
+  prefix?: string // the part before the name: a pytest file or class, a bun describe
   tc?: string // TC id from tests/TEST_CASES.md, when the test maps to exactly one row
   feature?: string // that row's Feature cell
 }
@@ -38,7 +39,7 @@ export type View = {
   nextId: number
   runs: Run[]
   branch?: { name: string; tcs: BranchTc[] }
-  tcSeen: Record<string, { status: Status; at: number }> // each TC's result in the newest run that had it
+  tcSeen: Record<string, { status: Status; at: number }> // each TC's result in the newest run (by start, `at`) that had it
   last: Partial<Record<Scope, LastRun>>
 }
 

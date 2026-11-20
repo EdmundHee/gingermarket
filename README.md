@@ -32,7 +32,7 @@ On Claude Code 2.1.275 or later, one step does both: `/plugin install <name> --m
 - **plan-tracker**: loads `hooks/register.tsx` into Claude Code. Makes opus calls (item extraction) and sonnet calls (checks), submits prompts on its own to send leftover items back, keeps its tracker in the plugin store.
 - **git-tracker**: loads `hooks/register.tsx`. Runs read-only `git` and `gh` commands after each edit or Bash call. Writes nothing.
 - **feature-tracker**: loads `hooks/register.tsx`. Runs `git`, spawns a read-only opus reader, writes `features.md` and review notes to `docs/features/` or `notesDir`. Plan N selected and ▶ submit a prompt.
-- **test-tracker**: loads `hooks/register.tsx`. Its `run_tests` tool runs the test command it is given with `/bin/sh -c` (after the permission check, as Bash), reads `tests/TEST_CASES.md`. Writes nothing to disk.
+- **test-tracker**: loads `hooks/register.tsx`. Its `run_tests` tool runs the test command it is given with `/bin/sh -c`, once the person allows the call (its own permission, not Bash's: allowing the tool allows every command; a command the Bash rules deny is refused), reads `tests/TEST_CASES.md`, and for the card runs read-only `git` (`rev-parse`, `merge-base`, `rev-list`, `ls-files`, `diff`) at session start and each run's start and end. Hooks every Bash call to watch test commands. Writes nothing to disk.
 
 ## Adding Plugins
 

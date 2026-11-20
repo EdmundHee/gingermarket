@@ -12,6 +12,8 @@ const CASES = 'tests/TEST_CASES.md'
 const KEEP = 5 // finished runs kept; a running run is never dropped
 const PASSES_SHOWN = 8 // an open run lists every failure, then its last 8 other rows
 const RESULT_MAX = 30_000 // Bash's own output cap
+const FAILED_MAX = 50 // failing tests named in the result; the rest as `+k more`
+const TIMEOUT_MS = 600_000 // Bash's own longest timeout; Esc stops a run sooner
 /** plan-tracker's TEST_CMD without its `tmux` and `claude plugin validate` arms. */
 const TEST_CMD = /\bclaude plugin test\b|\b(npm|pnpm|yarn|bun)( run)? test\b|\b(pytest|vitest|jest)\b|\b(go|cargo) test\b|tests\/screen\//
 /** pytest writes per test only unbuffered; colour codes would split the markers the parsers read. */
@@ -36,7 +38,9 @@ type Hit = {
   status?: Status
   name?: string
   prefix?: string
-  isSummary?: boolean // pytest's short summary names a failure its dots or verbose line already counted
+  isSummary?: boolean // pytest's short summary: names a failure its dots or verbose line may have counted
+  countIt?: boolean // a summary failure no dots counted (pytest under make or tox): count it
+  isScreen?: boolean // a screen verdict; the screen run line prints each twice (live, then after `--- verdicts`)
   now?: string
   last?: string
   dots?: string
@@ -46,17 +50,22 @@ type Hit = {
 const BUN = /^\((pass|fail|skip|todo)\) (.+?)(?: \[[\d.]+m?s\])?$/
 const SCREEN = /^(TC-\d+): (PASS|FAIL)$/
 const SCREEN_NOW = /^=== (.+)$/
-const PY_V = /^(\S+::\S+)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\b/
-const PY_NOW = /^(\S+::\S+)$/
-const PY_SUMMARY = /^(?:FAILED|ERROR) (\S+::\S+)/
+// a node id may hold spaces inside its parameter (`test_a[hello world]`); the status word ends it
+const PY_V = /^(\S+::.+?)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\b/
+const PY_NOW = /^(\S+::.+)$/
+const PY_SUMMARY = /^(?:FAILED|ERROR) (\S+::.+?)(?: - .*)?$/
 const PY_DOTS = /^([.FEsxX]+)\s*(?:\[\s*(\d+)%\])?$/
+const PY_DOTS_SO_FAR = /^[.FEsxX]+/ // a dots line still being written
+const PY_HEADER = /^=+ test session starts =+$/ // pytest under make, tox or a script: its dots count too
 const JEST_FILE = /^(?:PASS|FAIL)\s+(\S+)/
-const JS = /^\s*([✓✔√✗×✕↓])\s+(.+?)(?:\s+\d+(?:\.\d+)?\s*m?s)?$/
+const JS = /^\s*([✓✔√✗×✕↓○])\s+(.+?)(?:\s+\(?\d+(?:\.\d+)?\s*m?s\)?)?$/
 const JS_FILE = /\s*\(\d+ tests?\)$/ // vitest's default reporter: one line per file
 const BUN_STATUS: Record<string, Status> = { pass: 'pass', fail: 'fail', skip: 'skip', todo: 'skip' }
 const PY_STATUS: Record<string, Status> = { PASSED: 'pass', XPASS: 'pass', FAILED: 'fail', ERROR: 'fail', SKIPPED: 'skip', XFAIL: 'skip' }
 const DOT: Record<string, Status> = { '.': 'pass', X: 'pass', F: 'fail', E: 'fail', s: 'skip', x: 'skip' }
-const JS_STATUS: Record<string, Status> = { '✓': 'pass', '✔': 'pass', '√': 'pass', '✗': 'fail', '×': 'fail', '✕': 'fail', '↓': 'skip' }
+const JS_STATUS: Record<string, Status> = {
+  '✓': 'pass', '✔': 'pass', '√': 'pass', '✗': 'fail', '×': 'fail', '✕': 'fail', '↓': 'skip', '○': 'skip',
+}
 
 /** `prefix > name` (bun, vitest) or `path::name` (pytest): the name after the last separator, the rest its prefix. */
 function split(full: string): { name: string; prefix?: string } {
@@ -70,14 +79,14 @@ function split(full: string): { name: string; prefix?: string } {
 function parseLine(line: string, isPytest: boolean): Hit | undefined {
   let m: RegExpExecArray | null
   if ((m = BUN.exec(line))) return { status: BUN_STATUS[m[1] ?? ''], ...split(m[2] ?? '') }
-  if ((m = SCREEN.exec(line))) return { status: m[2] === 'PASS' ? 'pass' : 'fail', name: m[1] }
+  if ((m = SCREEN.exec(line))) return { status: m[2] === 'PASS' ? 'pass' : 'fail', name: m[1], isScreen: true }
   if ((m = SCREEN_NOW.exec(line))) return { now: m[1] }
   if ((m = PY_V.exec(line))) return { status: PY_STATUS[m[2] ?? ''], ...split(m[1] ?? '') }
   if ((m = PY_SUMMARY.exec(line))) return { status: 'fail', isSummary: true, ...split(m[1] ?? '') }
   if (isPytest && (m = PY_DOTS.exec(line))) return { dots: m[1], ...(m[2] === undefined ? {} : { percent: Number(m[2]) }) }
   if ((m = JEST_FILE.exec(line))) return { last: m[1] }
   if ((m = JS.exec(line))) {
-    const text = m[2] ?? ''
+    const text = (m[2] ?? '').replace(/^skipped /, '') // jest: `○ skipped name`
     return JS_FILE.test(text) ? { last: text.replace(JS_FILE, '') } : { status: JS_STATUS[m[1] ?? ''], ...split(text) }
   }
   return undefined
@@ -111,7 +120,8 @@ const within = (a: string, b: string) => segs(a).includes(segs(b)) || segs(b).in
 /** The one row a test maps to: by name, then by its prefix naming the row's file or folder; ambiguous → none. */
 function tcOf(index: Tc[], name: string, prefix?: string) {
   if (/^TC-\d+$/.test(name)) return index.find(t => t.id === name)
-  const hits = index.filter(t => t.name === bare(name))
+  // either side may carry a parameter: a Code test cell can name `x (case a / case b)` or a node `test_a[1]`
+  const hits = index.filter(t => t.name === name || bare(t.name) === bare(name))
   if (hits.length <= 1) return hits[0]
   const near = prefix === undefined ? [] : hits.filter(t => t.path !== '' && within(t.path, prefix))
   return near.length === 1 ? near[0] : undefined
@@ -119,12 +129,27 @@ function tcOf(index: Tc[], name: string, prefix?: string) {
 
 // ---- a run's output -----------------------------------------------------------------------------------------------
 
-/** What a run keeps outside the store: the line cut at a piece's end, the TC rows, the output Claude gets back. */
-type Live = { carry: string; isPytest: boolean; index: Tc[]; runLines: string[]; kept: string[]; size: number }
+type Stream = 'stdout' | 'stderr'
 
-let cwd = '' // the session's; a relative fs path resolves against the host process's, which may differ
+/** What a run keeps outside the store, per pipe where a line can be cut: the cut line, the dots already counted of
+ *  it; then the TC rows, the run: line, and the output Claude gets back. */
+type Live = {
+  carry: Record<Stream, string>
+  counted: Record<Stream, number>
+  sawDots: boolean
+  isPytest: boolean
+  index: Tc[]
+  runLines: string[]
+  kept: string[]
+  size: number
+}
 
-const readCases = ($: EngineInterface) => $.fs.read(`${cwd}/${CASES}`).then(String).catch(() => '')
+let cwd = '' // the session's at start, for the card's branch; a relative fs path resolves against the host process's
+
+const readCases = ($: EngineInterface, dir: string) => $.fs.read(`${dir}/${CASES}`).then(String).catch(() => '')
+
+/** Where this call runs: the session's working directory now (a worktree, a subagent's own), else the one at start. */
+const here = async ($: EngineInterface) => (await $.session.cwd().catch(() => '')) || cwd
 
 /** The commands of the `run:` header line: each backticked span (`pytest -q` | `npm test` gives two). */
 function runLinesOf(md: string) {
@@ -132,9 +157,18 @@ function runLinesOf(md: string) {
   return [...line.matchAll(/`([^`]+)`/g)].map(m => m[1] ?? '')
 }
 
-async function liveFor($: EngineInterface, command: string): Promise<Live> {
-  const md = await readCases($)
-  return { carry: '', isPytest: /\bpytest\b/.test(command), index: tcIndex(md), runLines: runLinesOf(md), kept: [], size: 0 }
+async function liveFor($: EngineInterface, command: string, dir: string): Promise<Live> {
+  const md = await readCases($, dir)
+  return {
+    carry: { stdout: '', stderr: '' },
+    counted: { stdout: 0, stderr: 0 },
+    sawDots: false,
+    isPytest: /\bpytest\b/.test(command),
+    index: tcIndex(md),
+    runLines: runLinesOf(md),
+    kept: [],
+    size: 0,
+  }
 }
 
 // ---- scope ----------------------------------------------------------------------------------------------------------
@@ -164,21 +198,39 @@ function keep(live: Live, line: string) {
   while (live.size > RESULT_MAX * 2 && live.kept.length > 1) live.size -= (live.kept.shift() ?? '').length + 1
 }
 
-/** The hits of one piece: whole lines now, the cut one when its rest comes; pytest -v names a test before it runs. */
-function piece(live: Live, text: string): Hit[] {
-  const lines = (live.carry + text).split('\n')
-  live.carry = lines.pop() ?? ''
+/** The hits of one piece of one pipe: whole lines now, the cut one when its rest comes. pytest -v names a test before
+ *  it runs; pytest -q's dots count as they come, before their line ends. */
+function piece(live: Live, text: string, stream: Stream = 'stdout'): Hit[] {
+  const lines = (live.carry[stream] + text).split('\n')
+  live.carry[stream] = lines.pop() ?? ''
   const hits: Hit[] = []
-  for (const raw of lines) {
+  lines.forEach((raw, i) => {
     const plain = raw.replace(ANSI, '').replace(/\r$/, '')
-    const hit = parseLine(shown(plain), live.isPytest)
+    const line = shown(plain)
+    if (PY_HEADER.test(line)) live.isPytest = true
+    const hit = parseLine(line, live.isPytest)
+    // the first line was the cut one: the dots counted while it was cut are not counted again
+    if (i === 0 && hit?.dots !== undefined) hit.dots = hit.dots.slice(live.counted[stream])
+    if (i === 0) live.counted[stream] = 0
+    if (hit?.dots !== undefined) live.sawDots = true
+    if (hit?.isSummary) hit.countIt = !live.sawDots
     if (hit?.status !== 'pass' || hit.isSummary) keep(live, plain)
     if (hit) hits.push(hit)
+  })
+  const cut = shown(live.carry[stream])
+  const soFar = live.isPytest ? (PY_DOTS_SO_FAR.exec(cut)?.[0] ?? '') : ''
+  if (soFar.length > live.counted[stream]) {
+    hits.push({ dots: soFar.slice(live.counted[stream]) })
+    live.counted[stream] = soFar.length
+    live.sawDots = true
   }
-  const pending = live.isPytest ? PY_NOW.exec(shown(live.carry)) : null
+  const pending = live.isPytest && soFar === '' ? PY_NOW.exec(cut) : null
   if (pending) hits.push({ now: split(pending[1] ?? '').name })
   return hits
 }
+
+/** The cut lines of both pipes, as if each had ended: at a run's end. */
+const flush = (live: Live) => (['stdout', 'stderr'] as const).flatMap(s => (live.carry[s] === '' ? [] : piece(live, '\n', s)))
 
 /** One hit on a run: counts, a row with its TC id, and what it is doing now. */
 function apply(run: Run, hit: Hit, index: Tc[]): Run {
@@ -194,20 +246,41 @@ function apply(run: Run, hit: Hit, index: Tc[]): Run {
   if (hit.last !== undefined) return { ...run, last: hit.last }
   if (hit.status === undefined || hit.name === undefined) return run
   const name = hit.name
-  if (hit.isSummary && run.tests.some(t => t.name === name)) return run
-  const tc = tcOf(index, name, hit.prefix)
-  const row: TestRow = { name, status: hit.status, ...(tc ? { tc: tc.id, feature: tc.feature } : {}) }
-  const counts = hit.isSummary ? run.counts : { ...run.counts, [hit.status]: run.counts[hit.status] + 1 }
+  const prefix = hit.prefix
+  // a summary names a failure a verbose line may have shown; a screen verdict is printed twice by the screen run line
+  const isSame = (t: TestRow) => t.name === name && t.prefix === prefix
+  if ((hit.isSummary || hit.isScreen) && run.tests.some(isSame)) return run
+  const tc = tcOf(index, name, prefix)
+  const row: TestRow = {
+    name, status: hit.status, ...(prefix === undefined ? {} : { prefix }), ...(tc ? { tc: tc.id, feature: tc.feature } : {}),
+  }
+  const counts = hit.isSummary && !hit.countIt ? run.counts : { ...run.counts, [hit.status]: run.counts[hit.status] + 1 }
   const { now: _now, ...rest } = run
-  return { ...rest, tests: [...run.tests, row], counts, last: name }
+  return { ...rest, tests: capRows([...run.tests, row]), counts, last: name }
+}
+
+/** Every failure and every TC-mapped row stay (the result, the card); of the rest only the last 8, which the pane
+ *  shows. A suite of thousands then stores a few dozen rows, not thousands. */
+function capRows(tests: TestRow[]) {
+  const isPlain = (t: TestRow) => t.status !== 'fail' && t.tc === undefined
+  let over = tests.filter(isPlain).length - PASSES_SHOWN
+  if (over <= 0) return tests
+  return tests.filter(t => {
+    if (over > 0 && isPlain(t)) {
+      over -= 1
+      return false
+    }
+    return true
+  })
 }
 
 // ---- the store ----------------------------------------------------------------------------------------------------
 
-/** Newest first: every running run, then the 5 newest finished ones. */
+/** Every running run, and the 5 finished ones that ended last: a long run that ends after five quick ones stays. */
 function trim(runs: Run[]) {
-  let finished = 0
-  return runs.filter(r => r.exit === undefined || ++finished <= KEEP)
+  const ended = runs.filter(r => r.exit !== undefined).sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0) || b.id - a.id)
+  const kept = new Set(ended.slice(0, KEEP).map(r => r.id))
+  return runs.filter(r => r.exit === undefined || kept.has(r.id))
 }
 
 let ticking: ReturnType<EngineInterface['clock']['every']> | undefined
@@ -255,23 +328,44 @@ function tcResults(tests: TestRow[]) {
   return out
 }
 
-/** Ends the run; its TC results and its scope's last result are kept past the history cap. */
-async function finish($: EngineInterface, id: number, end: Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>>) {
+type End = Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>>
+
+/** The view with run `id` ended: its TC results (unless a newer run already gave them) and its scope's last result
+ *  are kept past the history cap. */
+function close(v: View, id: number, end: End, endedAt: number): { v: View; done?: Run } {
+  const old = v.runs.find(r => r.id === id)
+  if (old === undefined) return { v }
+  const { now: _now, ...rest } = old
+  const done: Run = { ...rest, ...end, endedAt }
+  const tcSeen = { ...v.tcSeen }
+  for (const [tc, status] of Object.entries(tcResults(done.tests))) {
+    if ((tcSeen[tc]?.at ?? -Infinity) <= done.startedAt) tcSeen[tc] = { status, at: done.startedAt }
+  }
+  const prior = done.scope === undefined ? undefined : v.last[done.scope]
+  const last = done.scope === undefined || (prior !== undefined && prior.id > done.id)
+    ? v.last
+    : { ...v.last, [done.scope]: { id: done.id, command: done.command, counts: done.counts, exit: done.exit, endedAt } }
+  return { v: { ...v, runs: trim(v.runs.map(r => (r.id === id ? done : r))), tcSeen, last }, done }
+}
+
+/** Ends the run and answers it as it ended, whatever the history kept. */
+async function finish($: EngineInterface, id: number, end: End): Promise<Run | undefined> {
   const endedAt = await $.clock.now()
+  let done: Run | undefined
   await update($, view, v => {
-    const old = v.runs.find(r => r.id === id)
-    if (old === undefined) return v
-    const { now: _now, ...rest } = old
-    const done: Run = { ...rest, ...end, endedAt }
-    const tcSeen = { ...v.tcSeen }
-    for (const [tc, status] of Object.entries(tcResults(done.tests))) tcSeen[tc] = { status, at: endedAt }
-    const last = done.scope === undefined
-      ? v.last
-      : { ...v.last, [done.scope]: { id: done.id, command: done.command, counts: done.counts, exit: done.exit, endedAt } }
-    return { ...v, runs: trim(v.runs.map(r => (r.id === id ? done : r))), tcSeen, last }
+    const closed = close(v, id, end, endedAt)
+    done = closed.done
+    return closed.v
   })
   await tick($)
   void refreshBranch($)
+  return done
+}
+
+/** A run that never ran (refused) or ran no tests (a Bash command that only named one): no history, no last. */
+async function drop($: EngineInterface, id: number) {
+  await update($, view, v => ({ ...v, runs: v.runs.filter(r => r.id !== id) }))
+  await tick($)
 }
 
 // ---- the branch's TCs -----------------------------------------------------------------------------------------------
@@ -290,10 +384,10 @@ function caseRow(line: string): BranchTc | undefined {
   return { id, feature: cells[2] ?? '', isManual: (cells.at(-3) ?? '').replaceAll('`', '') === 'manual' }
 }
 
-/** The fork point of the nearest trunk: the one whose merge-base is fewest commits behind HEAD. */
+/** The fork point of the nearest trunk, local or `origin/`'s: the one whose merge-base is fewest commits behind HEAD. */
 async function nearestFork($: EngineInterface) {
   let best: { sha: string; behind: number } | undefined
-  for (const trunk of TRUNKS) {
+  for (const trunk of TRUNKS.flatMap(t => [t, `origin/${t}`])) {
     const mb = await git($, ['git', 'merge-base', 'HEAD', trunk])
     if (!mb.ok) continue
     const sha = mb.out.trim()
@@ -317,8 +411,8 @@ async function readBranch($: EngineInterface): Promise<View['branch']> {
   const tracked = await git($, ['git', 'ls-files', '--error-unmatch', CASES])
   // working tree against the fork: rows written before the code count; an untracked file is new on this branch
   const lines = tracked.ok
-    ? (await git($, ['git', 'diff', '--unified=0', fork, '--', CASES])).out.split('\n').filter(l => l.startsWith('+|')).map(l => l.slice(1))
-    : (await readCases($)).split('\n')
+    ? (await git($, ['git', 'diff', '--color=never', '--unified=0', fork, '--', CASES])).out.split('\n').filter(l => l.startsWith('+|')).map(l => l.slice(1))
+    : (await readCases($, cwd)).split('\n')
   const tcs = new Map<string, BranchTc>()
   for (const line of lines) {
     const row = caseRow(line)
@@ -346,9 +440,9 @@ function refreshBranch($: EngineInterface): Promise<void> {
         $.ui.log(`test-tracker: branch read failed: ${String(err)}`, { to: 'debug' })
       }
     } while (readAgain)
-  })().finally(() => {
+    // cleared in the same step as the last check, so a call can never land on a loop that already ended
     reading = undefined
-  })
+  })()
   return reading
 }
 
@@ -361,7 +455,8 @@ function report(run: Run | undefined, live: Live) {
   const c = run.counts
   const secs = (((run.endedAt ?? run.startedAt) - run.startedAt) / 1000).toFixed(1)
   const head = run.exit === 'error' ? `run_tests: ${run.error ?? 'failed'}` : run.exit === 'stopped' ? 'stopped' : `exit ${run.exit}`
-  const fails = run.tests.filter(t => t.status === 'fail').map(label)
+  const all = run.tests.filter(t => t.status === 'fail').map(label)
+  const fails = all.length > FAILED_MAX ? [...all.slice(0, FAILED_MAX), `+${all.length - FAILED_MAX} more`] : all
   const out = live.kept.join('\n')
   const tail = out.length > RESULT_MAX ? `… ${out.length - RESULT_MAX} earlier characters cut\n${out.slice(-RESULT_MAX)}` : out
   return [
@@ -441,10 +536,11 @@ function ago(ms: number) {
 
 /** How many tests the run should reach: the newest earlier finished run of the same command. */
 function expectedOf(v: View, r: Run) {
-  const prior = v.runs.find(o => o.id < r.id && o.exit !== undefined && o.command === r.command)
+  // a stopped or failed-to-run run stopped short: its count is no measure
+  const prior = v.runs.find(o => o.id < r.id && typeof o.exit === 'number' && o.command === r.command)
   if (prior !== undefined) return total(prior.counts)
   const last = r.scope === undefined ? undefined : v.last[r.scope]
-  return last !== undefined && last.id < r.id && last.command === r.command ? total(last.counts) : undefined
+  return last !== undefined && last.id < r.id && typeof last.exit === 'number' && last.command === r.command ? total(last.counts) : undefined
 }
 
 /** `▰▰▰▰▰▱▱▱▱▱ n/N · time`; pytest -q's percent; or the count alone with nothing to measure against. */
@@ -461,7 +557,11 @@ function barLine(v: View, r: Run, now: number) {
 function tcStatus(v: View) {
   const out: Record<string, Status> = {}
   for (const [tc, seen] of Object.entries(v.tcSeen)) out[tc] = seen.status
-  for (const r of [...v.runs].reverse()) if (r.exit === undefined) Object.assign(out, tcResults(r.tests))
+  for (const r of [...v.runs].reverse()) {
+    if (r.exit !== undefined) continue
+    // a running run started before the run that gave a TC's result is older news
+    for (const [tc, st] of Object.entries(tcResults(r.tests))) if (r.startedAt >= (v.tcSeen[tc]?.at ?? -Infinity)) out[tc] = st
+  }
   return out
 }
 
@@ -472,9 +572,11 @@ export const register: Register = on => {
       name: 'run_tests',
       description:
         'Run a test command with live progress in the Tests tab: each test ticks pass or fail as it finishes, with ' +
-        'its TC id from tests/TEST_CASES.md. Runs the command with /bin/sh in the session directory, as Bash does. ' +
-        'Use it for every test run (pytest, npm test, claude plugin test, screen scripts) instead of Bash. Returns ' +
-        'the exit code, the counts, the failing tests and the output without its passing-test lines.',
+        'its TC id from tests/TEST_CASES.md. Runs the command with /bin/sh in the session directory, as Bash does, ' +
+        'with PYTHONUNBUFFERED=1 NO_COLOR=1 FORCE_COLOR=0 set (a test that checks colour or buffering sees them). ' +
+        'A command your Bash rules deny is refused. Use it for every test run (pytest, npm test, claude plugin ' +
+        'test, screen scripts) instead of Bash. Returns the exit code, the counts, the failing tests and the output ' +
+        'without its passing-test lines.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -486,16 +588,30 @@ export const register: Register = on => {
               'focused: one test or TC you are working on; branch: this branch\'s tests (the plan\'s new and changed ' +
               'rows, the areas the diff touches); full: the whole suite, the run: line of tests/TEST_CASES.md',
           },
+          timeoutMs: { type: 'number', description: 'stop the run after this many milliseconds; 600000 when left out' },
         },
         required: ['command'],
       },
       isDeferred: false,
     })
     await $.command.register({ name: PANE, description: 'Open the Tests pane: test runs live, each test pass or fail, the last five runs' })
-    // a reload lost the child that fed a running run: it can only read as stopped now
-    await update($, view, v => ({ ...v, runs: trim(v.runs.map(r => (r.exit === undefined ? { ...r, exit: 'stopped' as const } : r))) }))
+    // a reload lost the child that fed a running run: it can only read as stopped now, ended now
+    const now = await $.clock.now()
+    await update($, view, v => v.runs.filter(r => r.exit === undefined).reduce((acc, r) => close(acc, r.id, { exit: 'stopped' }, now).v, v))
+    await tick($) // the `… ago` lines tick again after a reload
     void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
     void refreshBranch($) // the first prompt never waits on git; the card fills in when it lands
+    return next(e)
+  })
+
+  // /clear starts a new session with no session.start and `$.state` back to empty (gotcha-clear-fires-no-session-start)
+  on('classic.SessionStart', async ($, e, next) => {
+    if (e.source === 'clear') {
+      ticking?.cancel()
+      ticking = undefined
+      tickMs = 0
+      void refreshBranch($)
+    }
     return next(e)
   })
 
@@ -504,49 +620,64 @@ export const register: Register = on => {
     return { text: opened.isPlaced ? 'Tests pane opened.' : `Tests pane waits: ${opened.reason}` }
   })
 
-  // Served at tool.run, after the permission check: the person allows each command as a Bash call, and every
-  // plugin's tool.call hook (plan-tracker's Test phase) has seen the call by then.
+  // Served at tool.run, after the permission check of run_tests itself (its own tool, not Bash: allowing it allows
+  // every command); every plugin's tool.call hook (plan-tracker's Test phase) has seen the call by then.
   on('tool.run', { tool: RUN }, async ($, e, next) => {
-    const command = String((e as { command?: unknown }).command ?? '').trim()
+    const input = e as { command?: unknown; scope?: unknown; timeoutMs?: unknown }
+    const command = String(input.command ?? '').trim()
     if (command === '') return { result: 'run_tests: command is empty' }
+    // what the person's Bash rules deny, this tool does not run either
+    // ponytail: deny only; Bash allow rules do not approve run_tests calls, and the Bash sandbox does not wrap it
+    const verdict = await $.tool.check({ tool: 'Bash', input: { command } } as never).catch(() => undefined)
+    if (verdict?.decision === 'deny') {
+      return { result: `run_tests: refused: your Bash rules deny this command${verdict.reason ? ` (${verdict.reason})` : ''}` }
+    }
+    const dir = await here($)
     // read before the run starts: its run: line decides the scope the run is born with
-    const live = await liveFor($, command)
-    const scope = scopeOf((e as { scope?: unknown }).scope, command, live.runLines)
+    const live = await liveFor($, command, dir)
+    const scope = scopeOf(input.scope, command, live.runLines)
     const id = await begin($, { source: 'tool', command, ...scope, ...(e.agentId === undefined ? {} : { agent: e.agentId }) })
+    const limitMs = typeof input.timeoutMs === 'number' && input.timeoutMs > 0 ? input.timeoutMs : TIMEOUT_MS
     // ponytail: /bin/sh, not the person's zsh; switch if a run line ever needs zsh syntax
-    // ponytail: no timeout of its own; Esc stops it. Add timeoutMs if a hung run without Esc ever happens.
     const stop = new Promise<'stop'>(resolve => {
       if (next.signal.aborted) resolve('stop')
       else next.signal.addEventListener('abort', () => resolve('stop'), { once: true })
     })
-    let end: Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>> = { exit: 'error', error: 'ended without an exit code' }
+    let resolveLate: (v: 'late') => void = () => undefined
+    const late = new Promise<'late'>(resolve => { resolveLate = resolve })
+    const timer = $.clock.after(limitMs, () => resolveLate('late'))
+    let end: End = { exit: 'error', error: 'ended without an exit code' }
+    let done: Run | undefined
     try {
-      const child = $.process.spawn({ argv: ['/bin/sh', '-c', command], env: ENV })
+      const child = $.process.spawn({ argv: ['/bin/sh', '-c', command], cwd: dir || undefined, env: ENV })
       for (;;) {
         const pull = child.next()
-        pull.catch(() => undefined) // a pull left behind by Esc may reject later
-        const step = await Promise.race([pull, stop])
-        if (step === 'stop') {
+        pull.catch(() => undefined) // a pull left behind by Esc or the timeout may reject later
+        const step = await Promise.race([pull, stop, late])
+        if (step === 'stop' || step === 'late') {
           // leaving the stream kills the child
           void child.return({ code: null, signal: null }).catch(() => undefined)
-          end = { exit: 'stopped' }
+          end = step === 'stop' ? { exit: 'stopped' } : { exit: 'error', error: `timed out after ${fmt(limitMs)}` }
           break
         }
         if (step.done) {
-          const tailHits = live.carry === '' ? [] : piece(live, '\n')
+          const tailHits = flush(live)
           if (tailHits.length > 0) await patch($, id, hitAll(tailHits, live.index))
           end = step.value.code === null ? { exit: 'error', error: `ended by ${step.value.signal ?? 'a signal'}` } : { exit: step.value.code }
           break
         }
-        const hits = piece(live, step.value.text)
+        const hits = piece(live, step.value.text, step.value.stream)
         if (hits.length > 0) await patch($, id, hitAll(hits, live.index))
       }
     } catch (err) {
       end = next.signal.aborted ? { exit: 'stopped' } : { exit: 'error', error: message(err) }
     } finally {
-      await finish($, id, end)
+      timer.cancel()
+      // a line cut when the stream broke or stopped still goes back to Claude
+      for (const s of ['stdout', 'stderr'] as const) if (live.carry[s] !== '') keep(live, live.carry[s].replace(ANSI, ''))
+      done = await finish($, id, end)
     }
-    return { result: report((await read($, view)).runs.find(r => r.id === id), live) }
+    return { result: report(done, live) }
   })
 
   // A test command run through Bash: shown as running, its rows parsed from what Bash returned.
@@ -555,23 +686,29 @@ export const register: Register = on => {
     const command = String(input.command ?? '')
     // ponytail: background Bash untracked; its output lands in a file later and no event says when it ends
     if (input.run_in_background === true || !TEST_CMD.test(command)) return next(e)
-    const live = await liveFor($, command)
+    const live = await liveFor($, command, await here($))
     const id = await begin($, {
       source: 'bash', command, ...scopeOf(undefined, command, live.runLines), ...(e.agentId === undefined ? {} : { agent: e.agentId }),
     })
-    let end: Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>> = { exit: 'error', error: 'the Bash call failed' }
+    let end: End = { exit: 'error', error: 'the Bash call failed' }
+    let isDropped = false
     try {
       const r = await next(e)
       if (r.deny !== undefined) {
-        end = { exit: 'stopped' } // refused: it never ran
+        isDropped = true // refused: it never ran
         return r
       }
-      const hits = piece(live, `${outputOf(r)}\n`)
+      const hits = [...piece(live, `${outputOf(r)}\n`), ...flush(live)]
       if (hits.length > 0) await patch($, id, hitAll(hits, live.index))
-      end = { exit: r.isError ? 1 : 0 }
+      const ran = (await read($, view)).runs.find(x => x.id === id)
+      // `pip install pytest`, `grep jest`: the pattern matched a word, no test ran
+      isDropped = ran !== undefined && ran.tests.length === 0 && total(ran.counts) === 0
+      const isInterrupted = next.signal.aborted || (r.result as { interrupted?: unknown } | undefined)?.interrupted === true
+      end = isInterrupted ? { exit: 'stopped' } : { exit: r.isError ? 1 : 0 }
       return r
     } finally {
-      await finish($, id, end)
+      if (isDropped) await drop($, id)
+      else await finish($, id, end)
     }
   })
 

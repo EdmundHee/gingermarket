@@ -98,24 +98,33 @@ test's own prefix (bun's describe, pytest's file); still two, no id.
 
 ## Permissions
 
-`run_tests` goes through the permission check like any tool: the person approves each command. Allowing
-the tool in settings lets **any** command it is given run without a prompt; Bash rules can allow per
-command, this tool cannot.
+`run_tests` goes through the permission check as its own tool, not as Bash: the person approves each
+call. Allowing the tool in settings lets **any** command it is given run without a prompt; Bash rules can
+allow per command, this tool cannot. Before it runs a command it asks the Bash rules
+(`$.tool.check`, no prompt): a command they **deny** is refused. Their allow rules do not approve it, and
+the Bash sandbox does not wrap it.
 
 ## What it runs and writes
 
-- The test command given to `run_tests`, as `/bin/sh -c <command>` with `PYTHONUNBUFFERED=1`,
-  `NO_COLOR=1`, `FORCE_COLOR=0` (pytest writes per test only unbuffered; colour codes would split the
-  markers).
+- The test command given to `run_tests`, as `/bin/sh -c <command>` in the session's working directory
+  at that moment (a worktree, a subagent's own), with `PYTHONUNBUFFERED=1`, `NO_COLOR=1`, `FORCE_COLOR=0`
+  (pytest writes per test only unbuffered; colour codes would split the markers). A test that checks
+  colour or buffering sees them.
 - Reads `tests/TEST_CASES.md` at the start of each run. Writes nothing to disk; the runs live in the
   session's plugin state.
 - For the card, at session start and at each run's start and end, read-only git through
   `$.process.run`: `git rev-parse --abbrev-ref HEAD`, `git merge-base HEAD <trunk>` and
-  `git rev-list --count <fork>..HEAD` per trunk, `git ls-files --error-unmatch tests/TEST_CASES.md`,
-  `git diff --unified=0 <fork> -- tests/TEST_CASES.md`.
+  `git rev-list --count <fork>..HEAD` per trunk (local and `origin/`),
+  `git ls-files --error-unmatch tests/TEST_CASES.md`, `git diff --color=never --unified=0 <fork> --
+  tests/TEST_CASES.md`.
 
 ## Limits
 
 - `/bin/sh`, not your zsh: a command using zsh-only syntax fails.
-- No timeout of its own; Esc stops a run.
+- A run stops after 10 minutes (Bash's longest), or after `timeoutMs`; Esc stops it sooner.
 - A runner not listed above shows its command, time and exit, with no rows.
+- A Bash call whose command only names a runner (`pip install pytest`, `grep jest`) and prints no test
+  lines leaves no run behind; one the person refuses leaves none either.
+- It hooks every Bash call to watch for test commands. A hook on a tool turns off that tool's move to the
+  background (Ctrl+B) and its live output in Claude Code, so with test-tracker installed alone, Bash calls
+  lose both. plan-tracker and git-tracker hook every Bash call already.

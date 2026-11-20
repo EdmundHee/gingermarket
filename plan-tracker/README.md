@@ -41,7 +41,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   `/plan-tracker reset` wipes the tracker for this project; ids keep counting, so an old `#id` never
   names a new item. `/clear` keeps the tracker: it reloads from the project store.
 - Status line: `plan 2/7`.
-- At the end of every turn in which Claude edited a file or ran a command, the tracker audits the
+- At the end of every turn in which Claude edited a file or ran a command (test-tracker's `run_tests` counts as
+  one), the tracker audits the
   open items itself (one sonnet call): it checks each `mark_done` claim, and `✓` marks land even where Claude
   called no `mark_done`. The audit reads Claude's final reply too, not only the tool calls. A turn you stop with
   Esc is not audited: its claims stay `⚠` until the next audited turn or `Verify all`.
@@ -64,7 +65,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
   - **Codex review**: a Bash `codex exec` with `MODE: plan-review`. **Codex verify**: one with `MODE: acceptance`.
   - **Dev**: from the approval, and every repo-file edit; **Review fixes** once a Codex verify has run for that group.
   - **Test**: `claude plugin test|validate`, `npm|pnpm|yarn|bun test`, `pytest`, `vitest`, `jest`, `go|cargo test`,
-    `tests/screen/`, `tmux send-keys|capture-pane`. Other Bash (git, grep) switches nothing.
+    `tests/screen/`, `tmux send-keys|capture-pane`, and test-tracker's `run_tests` tool (its call switches as it
+    starts, a subagent's too). Other Bash (git, grep) switches nothing.
   - **Not counted**: from the end of each turn until the next one, and while a question or plan-approval dialog
     is up, the clock pauses. A Codex run launched in the background keeps counting as Codex until the turn its
     result starts.
