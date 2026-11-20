@@ -1072,18 +1072,25 @@ describe('plan-tracker', () => {
 
   test('test_tracker_run_counts_as_test_work', async ($, on) => {
     const calls = opus(on, () => audit([[1, 'verified', 'tests ran']], 'done'))
-    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, () => ({ result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }))
+    let release!: () => void
+    const ran = new Promise<void>(r => { release = r })
+    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, async () => {
+      await ran
+      return { result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }
+    })
     // two items: verifying the last one would stop the clock and hide the time card
     const seen = await start($, on, clocked([[1, 'open'], [2, 'open']], 'dev'), [], T)
 
     await seen.clock.advance(10 * SEC)
-    await $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q' } as never)
-    const phase = seen.state?.clock?.phase
+    const call = $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q' } as never)
     await seen.clock.advance(5 * SEC)
+    const whileHeld = await timeRow($, 'p1', 'test')
+    release()
+    await call
     await endTurn($)
 
-    expect(phase).toBe('test')
-    expect(await timeRow($, 'p1', 'test')).toMatch(/(^|\D)5s$/)
+    expect(whileHeld).toContain('●')
+    expect(whileHeld).toMatch(/(^|\D)5s$/)
     expect(calls.n).toBe(1)
   })
 

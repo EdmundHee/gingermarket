@@ -56,6 +56,11 @@ Working from a clone instead: `claude plugin marketplace add <clone folder>` the
 
 Other lines are ignored. The run's own `✓`/`✗` is its exit code, not the counts.
 
+Rows tick live only as fast as the runner writes. `claude plugin test` prints its whole report when the
+suite ends (piped or under a pty), so its run shows `▶` and the time, then every row at once. Plain
+`bun test` writes no per-test lines when its output is not a terminal, only the totals. pytest streams
+per test (the mod sets `PYTHONUNBUFFERED=1`), and the screen run line streams per script.
+
 **TC ids**: each row's `Code test` cell (`path > name` or `path::name`) is matched by the test's name,
 a trailing `(…)` or `[…]` parameter dropped. Two rows with the same name: the one whose path holds the
 test's own prefix (bun's describe, pytest's file); still two, no id.

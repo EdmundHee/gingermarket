@@ -254,13 +254,22 @@ describe('test-tracker', () => {
   })
 
   test('test_rows_get_tc_ids_from_code_test_column', async ($, on) => {
-    const out = '(pass) s > x_does_y (case 1) [2ms]\n(pass) b > dup [1ms]\n(pass) z > dup [1ms]\n'
+    const out = [
+      '(pass) s > x_does_y (case 1) [2ms]',
+      '(pass) b > dup [1ms]',
+      '(pass) z > dup [1ms]',
+      '(pass) tests/unit > same [1ms]', // a prefix of two segments
+      '(pass) e > same [1ms]', // a letter inside `tests` is no segment: ambiguous
+      '',
+    ].join('\n')
     const seen = await start($, on, {
       files: {
         [CASES]: [
           row('TC-007', 'x feature', 'a/register.test.ts > x_does_y'),
           row('TC-008', 'dup in b', 'b/register.test.ts > dup'),
           row('TC-009', 'dup in c', 'c/register.test.ts > dup'),
+          row('TC-010', 'same in unit', 'tests/unit/a.test.ts > same'),
+          row('TC-011', 'same in e2e', 'tests/e2e/a.test.ts > same'),
         ].join('\n'),
       },
       scripts: { 'bun test': { pieces: [out] } },
@@ -269,7 +278,10 @@ describe('test-tracker', () => {
     await run($, 'bun test')
     await seen.settle()
     const pane = await mount($)
-    const rows = [await textOf(pane, 'row:1:0'), await textOf(pane, 'row:1:1'), await textOf(pane, 'row:1:2')]
+    const rows = [
+      await textOf(pane, 'row:1:0'), await textOf(pane, 'row:1:1'), await textOf(pane, 'row:1:2'),
+      await textOf(pane, 'row:1:3'), await textOf(pane, 'row:1:4'),
+    ]
     delete seen.files[CASES]
     await run($, 'bun test')
     await seen.settle()
@@ -278,6 +290,9 @@ describe('test-tracker', () => {
     expect(rows[1]).toContain('TC-008 dup')
     expect(rows[2]).toContain('✓ dup')
     expect(rows[2]).not.toContain('TC-')
+    expect(rows[3]).toContain('TC-010 same')
+    expect(rows[4]).toContain('✓ same')
+    expect(rows[4]).not.toContain('TC-')
     expect(await textOf(pane, 'row:2:0')).toContain('x_does_y')
     expect(await textOf(pane, 'row:2:0')).not.toContain('TC-')
   })

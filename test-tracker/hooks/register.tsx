@@ -99,12 +99,17 @@ function tcIndex(md: string): Tc[] {
 /** A test name without its parameter: `x (case 1)` → `x`, `test_a[2]` → `test_a`. */
 const bare = (name: string) => name.replace(/\s*(?:\([^)]*\)|\[[^\]]*\])$/, '')
 
+/** `/a/b/c/` of `a/b > c` or `a::b`, so whole segments compare and `e` never matches inside `test`. */
+const segs = (s: string) => `/${s.split(/\/| > |::/).filter(Boolean).join('/')}/`
+/** One holds the other as a run of whole segments: describe `b` in `b/x.ts`, `tests/unit` in `tests/unit/a.ts`, file `a.ts` in vitest's `a.ts > suite`. */
+const within = (a: string, b: string) => segs(a).includes(segs(b)) || segs(b).includes(segs(a))
+
 /** The one row a test maps to: by name, then by its prefix naming the row's file or folder; ambiguous → none. */
 function tcOf(index: Tc[], name: string, prefix?: string) {
   if (/^TC-\d+$/.test(name)) return index.find(t => t.id === name)
   const hits = index.filter(t => t.name === bare(name))
   if (hits.length <= 1) return hits[0]
-  const near = prefix === undefined ? [] : hits.filter(t => t.path === prefix || t.path.split('/').includes(prefix))
+  const near = prefix === undefined ? [] : hits.filter(t => t.path !== '' && within(t.path, prefix))
   return near.length === 1 ? near[0] : undefined
 }
 
