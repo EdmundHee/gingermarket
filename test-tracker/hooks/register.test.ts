@@ -45,8 +45,32 @@ function spawner(on: On, scripts: Record<string, Script>) {
   return seen
 }
 
-/** `bash`: answers every Bash call in place of an empty success. */
-type Setup = { scripts?: Record<string, Script>; files?: Record<string, string>; bash?: () => Promise<unknown> }
+/** One git answer: stdout (exit 0), an exit with stdout, a git that cannot start, or one held open (a promise).
+ *  Commands not listed exit 1: not a repo. */
+type GitAnswer = string | { exit: number; stdout?: string } | 'missing'
+type GitReply = GitAnswer | Promise<GitAnswer>
+
+/** Answers `process.run` from `answers` (read at call time, so a test may change them); records each argv. */
+function git(on: On, answers: Record<string, GitReply>) {
+  const ran: string[] = []
+  on('process.run', async (_$, e) => {
+    const argv = e.argv.join(' ')
+    ran.push(argv)
+    const a = await (answers[argv] ?? { exit: 1 })
+    if (a === 'missing') return { deny: 'git: command not found' }
+    const { exit, stdout } = typeof a === 'string' ? { exit: 0, stdout: a } : { exit: a.exit, stdout: a.stdout ?? '' }
+    return { value: { exitCode: exit, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  return ran
+}
+
+/** `bash`: answers every Bash call in place of an empty success. `git`: the repo's answers; none, not a repo. */
+type Setup = {
+  scripts?: Record<string, Script>
+  files?: Record<string, string>
+  bash?: () => Promise<unknown>
+  git?: Record<string, GitReply>
+}
 
 function setup(on: On, o: Setup = {}) {
   const clock = mock.clock(on)
@@ -55,6 +79,7 @@ function setup(on: On, o: Setup = {}) {
     opened: [] as { id: string; title?: string; columns?: number }[],
     tools: [] as Record<string, unknown>[],
     spawn: spawner(on, o.scripts ?? {}),
+    ran: git(on, o.git ?? {}),
     files,
     clock,
     settle: () => clock.settle(),
@@ -83,8 +108,10 @@ async function start($: Engine, on: On, o: Setup = {}) {
   return seen
 }
 
-const run = ($: Engine, command: string, agentId?: string) =>
-  $.tool.run({ tool: RUN, command, ...(agentId === undefined ? {} : { agentId }) } as never)
+const run = ($: Engine, command: string, agentId?: string, scope?: string) =>
+  $.tool.run({
+    tool: RUN, command, ...(agentId === undefined ? {} : { agentId }), ...(scope === undefined ? {} : { scope }),
+  } as never)
 
 const resultOf = (r: unknown) => String((r as { result?: unknown }).result ?? '')
 
@@ -478,5 +505,323 @@ describe('test-tracker', () => {
     const seen = await start($, on)
 
     expect(seen.tools.find(t => t.name === 'run_tests')).toMatchObject({ name: 'run_tests', isDeferred: false })
+  })
+})
+
+// ---- the summary card ------------------------------------------------------------------------------------------------
+
+const BR = 'git rev-parse --abbrev-ref HEAD'
+const forkOf = (trunk: string) => `git merge-base HEAD ${trunk}`
+const count = (sha: string) => `git rev-list --count ${sha}..HEAD`
+const TRACKED = 'git ls-files --error-unmatch tests/TEST_CASES.md'
+const diff = (sha: string) => `git diff --unified=0 ${sha} -- tests/TEST_CASES.md`
+/** The diff of TEST_CASES.md adding `rows`, as `git diff --unified=0` prints it. */
+const added = (rows: string[]) => `@@ -1,0 +2,${rows.length} @@\n${rows.map(r => `+${r}`).join('\n')}\n`
+/** Branch `feat/x` cut from dev at `abc`, 2 commits back, TEST_CASES.md tracked; its diff adds `rows`. */
+const featX = (rows: string[] = []): Record<string, GitReply> => ({
+  [BR]: 'feat/x\n', [forkOf('dev')]: 'abc\n', [count('abc')]: '2\n', [TRACKED]: 'tests/TEST_CASES.md\n', [diff('abc')]: added(rows),
+})
+const RUN_LINE = 'run: `npm test`'
+
+describe('test-tracker card', () => {
+  test('card_scope_from_input', async ($, on) => {
+    const rest = held()
+    const seen = await start($, on, { git: featX(), scripts: { 'pytest -q': { pieces: ['..\n', rest.piece] } } })
+
+    const call = run($, 'pytest -q', undefined, 'focused')
+    await seen.settle()
+    const pane = await mount($)
+    const head = await textOf(pane, 'card:head')
+    rest.release('\n')
+    await call
+
+    expect(head).toContain('feat/x')
+    expect(head).toContain('Focused test')
+  })
+
+  test('card_scope_guessed_from_command', async ($, on) => {
+    const quick = { pieces: ['(pass) s > a [1ms]\n'] }
+    const seen = await start($, on, {
+      files: { [CASES]: `${RUN_LINE}\n` },
+      scripts: { 'npm test': quick, 'pytest t.py::test_a': quick, 'bun test': quick, 'sh screen.sh tests/screen/TC-012.mjs': quick },
+    })
+    const pane = await mount($)
+    const heads: string[] = []
+
+    for (const c of ['npm test', 'pytest t.py::test_a', 'bun test']) {
+      await run($, c)
+      await seen.settle()
+      heads.push(await textOf(pane, 'card:head'))
+    }
+    await $.tool.call({ tool: 'Bash', command: 'pytest -k login' })
+    await seen.settle()
+    heads.push(await textOf(pane, 'card:head'))
+    await run($, 'sh screen.sh tests/screen/TC-012.mjs')
+    await seen.settle()
+    heads.push(await textOf(pane, 'card:head'))
+
+    expect(heads[0]).toContain('Full suite')
+    expect(heads[1]).toContain('Focused test')
+    expect(heads[2]).toContain('Branch tests')
+    expect(heads[3]).toContain('Branch tests')
+    expect(heads[4]).toContain('Focused test')
+  })
+
+  test('card_flags_full_scope_off_the_run_line', async ($, on) => {
+    const seen = await start($, on, { files: { [CASES]: `${RUN_LINE}\n` }, scripts: { 'bun test': { pieces: ['(pass) s > a [1ms]\n'] } } })
+
+    await run($, 'bun test', undefined, 'full')
+    await seen.settle()
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:head')).toContain('Full suite')
+    expect(await textOf(pane, 'card:head')).toContain('not the run: line')
+  })
+
+  test('card_bar_expects_last_same_command_total', async ($, on) => {
+    const scripts: Record<string, Script> = { 'bun test': { pieces: ['(pass) s > a [1ms]\n(pass) s > b [1ms]\n(pass) s > c [1ms]\n(pass) s > d [1ms]\n'] } }
+    const seen = await start($, on, { scripts })
+    const pane = await mount($)
+
+    await run($, 'bun test')
+    await seen.settle()
+    const first = await textOf(pane, 'card:bar')
+    const rest = held()
+    scripts['bun test'] = { pieces: ['(pass) s > a [1ms]\n(pass) s > b [1ms]\n', rest.piece] }
+    const call = run($, 'bun test')
+    await seen.settle()
+    const second = await textOf(pane, 'card:bar')
+    rest.release('\n')
+    await call
+
+    expect(first).not.toContain('▰')
+    expect(first).toContain('4')
+    expect(second).toContain('▰▰▰▰▰▱▱▱▱▱ 2/4')
+  })
+
+  test('card_lists_branch_tcs_and_their_results', async ($, on) => {
+    const rows = [
+      row('TC-301', 'a', 'tests/screen/TC-301.mjs'),
+      row('TC-302', 'b', 'tests/screen/TC-302.mjs'),
+      row('TC-303', 'c', 'x/y.test.ts > c_case'),
+      row('TC-304', 'd', 't.py::test_s'),
+      row('TC-305', 'e', 'manual'),
+    ]
+    const seen = await start($, on, {
+      git: featX(rows),
+      files: { [CASES]: rows.join('\n') },
+      scripts: { 'sh screen.sh': { pieces: ['TC-301: PASS\nTC-302: FAIL\nt.py::test_s SKIPPED\n'], code: 1 } },
+    })
+    const pane = await mount($)
+    const before = await textOf(pane, 'card:tcs')
+
+    await run($, 'sh screen.sh')
+    await seen.settle()
+    const after = await textOf(pane, 'card:tcs')
+
+    expect(before).toContain('Branch TCs 5')
+    expect(before).toContain('✓ 0')
+    expect(before).toContain('· 5 not run')
+    expect(after).toContain('✓ 1')
+    expect(after).toContain('✗ 1')
+    expect(after).toContain('○ 1')
+    expect(after).toContain('· 2 not run')
+    expect(await textOf(pane, 'card:tc:TC-302')).toContain('✗ TC-302 b')
+    expect(await textOf(pane, 'card:tc:TC-303')).toContain('· TC-303 c')
+    expect(await textOf(pane, 'card:tc:TC-305')).toContain('· TC-305 e (manual)')
+    expect(await has(pane, 'card:tc:TC-301')).toBe(false)
+  })
+
+  test('card_no_branch_tcs_on_trunk_or_outside_git', async ($, on) => {
+    const answers: Record<string, GitReply> = { [BR]: 'dev\n' }
+    const seen = await start($, on, { git: answers, scripts: { 'bun test': { pieces: ['(pass) s > a [1ms]\n'] } } })
+    const pane = await mount($)
+
+    await run($, 'bun test')
+    await seen.settle()
+    const onTrunk = { head: await textOf(pane, 'card:head'), tcs: await has(pane, 'card:tcs') }
+    delete answers[BR]
+    await run($, 'bun test')
+    await seen.settle()
+    const outside = await textOf(pane, 'card:head')
+    answers[BR] = 'missing' // git cannot start: a failed read, never an unhandled rejection
+    await run($, 'bun test')
+    await seen.settle()
+    const noGit = await textOf(pane, 'card:head')
+
+    expect(onTrunk.head).toContain('dev')
+    expect(onTrunk.head).toContain('Branch tests')
+    expect(onTrunk.tcs).toBe(false)
+    expect(outside).toContain('Branch tests')
+    expect(outside).not.toContain('dev')
+    expect(noGit).toContain('Branch tests')
+    expect(noGit).not.toContain('dev')
+  })
+
+  test('card_run_does_not_wait_on_git', async ($, on) => {
+    const branch = held()
+    const answers = featX()
+    answers[BR] = branch.piece
+    const seen = await start($, on, { git: answers, scripts: { 'bun test': { pieces: ['(pass) s > a [1ms]\n'] } } })
+
+    const result = resultOf(await run($, 'bun test'))
+    const pane = await mount($)
+    const whileHeld = await textOf(pane, 'card:head')
+    branch.release('feat/x\n')
+    await seen.settle()
+
+    expect(result.startsWith('exit 0')).toBe(true)
+    expect(whileHeld).not.toContain('feat/x')
+    expect(await textOf(pane, 'card:head')).toContain('feat/x')
+  })
+
+  test(
+    'card_shows_last_result_per_scope',
+    {
+      // stops the run named `esc me` the way Esc does: answers above while the call is pending
+      plugins: [{
+        name: 'esc',
+        tier: 'prepend',
+        register: on => {
+          on('tool.run', { tool: /^mcp__test-tracker__run_tests$/ }, async ($, e, next) => {
+            if ((e as { command?: unknown }).command !== 'esc me') return next(e)
+            void next(e).catch(() => undefined)
+            await $.clock.sleep(1000)
+            return { result: 'interrupted' }
+          })
+        },
+      }],
+    },
+    async ($, on) => {
+      const rest = held()
+      const seen = setup(on, {
+        scripts: {
+          'npm test': { pieces: ['(pass) s > a [1ms]\n(pass) s > b [1ms]\n(pass) s > c [1ms]\n'] },
+          'bun test': { pieces: ['(pass) s > a [1ms]\n(fail) s > b [1ms]\n'], code: 1 },
+          'esc me': { pieces: ['(pass) s > a [1ms]\n', rest.piece] },
+          nope: { pieces: [], reject: 'ENOENT: nope' },
+        },
+      })
+      await seen.clock.set(1_000_000)
+      await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
+      const pane = await mount($)
+
+      await run($, 'npm test', undefined, 'full')
+      await seen.clock.advance(12 * 60_000)
+      await run($, 'bun test', undefined, 'branch')
+      await seen.clock.advance(3 * 60_000)
+      await seen.settle()
+      const full = await textOf(pane, 'card:last:full')
+      const branch = await textOf(pane, 'card:last:branch')
+      const call = run($, 'esc me', undefined, 'focused')
+      await seen.settle()
+      await seen.clock.advance(1000)
+      await call
+      await seen.settle()
+      const stopped = await textOf(pane, 'card:last:focused')
+      await run($, 'nope', undefined, 'focused')
+      await seen.settle()
+      const failed = await textOf(pane, 'card:last:focused')
+      rest.release('\n')
+
+      expect(full).toContain('✓')
+      expect(full).toContain('3/3')
+      expect(full).toContain('15m ago')
+      expect(branch).toContain('✗')
+      expect(branch).toContain('1/2')
+      expect(branch).toContain('3m ago')
+      expect(branch).not.toContain('✓')
+      expect(stopped).toContain('■')
+      expect(stopped).not.toContain('✓')
+      expect(failed).toContain('!')
+      expect(failed).not.toContain('✓')
+    },
+  )
+
+  test('card_tc_results_and_last_outlive_history_cap', async ($, on) => {
+    const rows = [row('TC-301', 'a', 'tests/screen/TC-301.mjs')]
+    const scripts: Record<string, Script> = { 'sh a': { pieces: ['TC-301: PASS\n'] } }
+    for (let i = 1; i <= 6; i++) scripts[`c${i}`] = { pieces: ['(pass) s > z [1ms]\n'] }
+    const seen = await start($, on, { git: featX(rows), files: { [CASES]: rows.join('\n') }, scripts })
+
+    await run($, 'sh a', undefined, 'full')
+    for (let i = 1; i <= 6; i++) await run($, `c${i}`)
+    await seen.settle()
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:tcs')).toContain('✓ 1')
+    expect(await has(pane, 'card:last:full')).toBe(true)
+    expect(await has(pane, 'head:1')).toBe(false)
+  })
+
+  test('card_branch_tcs_update_while_running', async ($, on) => {
+    const rows = [row('TC-301', 'a', 'tests/screen/TC-301.mjs'), row('TC-302', 'b', 'tests/screen/TC-302.mjs')]
+    const rest = held()
+    const seen = await start($, on, {
+      git: featX(rows), files: { [CASES]: rows.join('\n') }, scripts: { 'sh a': { pieces: ['TC-301: PASS\n', rest.piece] } },
+    })
+
+    const call = run($, 'sh a')
+    await seen.settle()
+    const pane = await mount($)
+    const during = await textOf(pane, 'card:tcs')
+    rest.release('\n')
+    await call
+
+    expect(during).toContain('✓ 1')
+    expect(during).toContain('· 1 not run')
+  })
+
+  test('card_tc_fails_when_any_row_fails_newest_run_wins', async ($, on) => {
+    const rows = [row('TC-301', 'x', 'a/x.test.ts > x_case')]
+    const scripts: Record<string, Script> = {
+      'bun test': { pieces: ['(pass) s > x_case (a) [1ms]\n(fail) s > x_case (b) [1ms]\n'], code: 1 },
+    }
+    const seen = await start($, on, { git: featX(rows), files: { [CASES]: rows.join('\n') }, scripts })
+    const pane = await mount($)
+
+    await run($, 'bun test')
+    await seen.settle()
+    const mixed = await textOf(pane, 'card:tcs')
+    scripts['bun test'] = { pieces: ['(pass) s > x_case (a) [1ms]\n(pass) s > x_case (b) [1ms]\n'] }
+    await run($, 'bun test')
+    await seen.settle()
+    const rerun = await textOf(pane, 'card:tcs')
+
+    expect(mixed).toContain('✗ 1')
+    expect(mixed).toContain('✓ 0')
+    expect(rerun).toContain('✓ 1')
+    expect(rerun).toContain('✗ 0')
+  })
+
+  test('card_untracked_cases_file_counts_every_row', async ($, on) => {
+    const rows = [row('TC-401', 'a', 'manual'), row('TC-402', 'b', 'x.test.ts > b_case')]
+    const answers = featX()
+    delete answers[TRACKED]
+    const seen = await start($, on, { git: answers, files: { [CASES]: `${RUN_LINE}\n${rows.join('\n')}\n` } })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:tcs')).toContain('Branch TCs 2')
+    expect(await textOf(pane, 'card:tcs')).toContain('· 2 not run')
+    expect(seen.ran).not.toContain(diff('abc'))
+  })
+
+  test('card_branch_tcs_diff_against_nearest_trunk_fork', async ($, on) => {
+    const one = [row('TC-301', 'a', 'manual')]
+    const three = [...one, row('TC-302', 'b', 'manual'), row('TC-303', 'c', 'manual')]
+    const seen = await start($, on, {
+      git: {
+        [BR]: 'feat/x\n', [TRACKED]: 'tests/TEST_CASES.md\n',
+        [forkOf('dev')]: 'd1\n', [count('d1')]: '2\n', [diff('d1')]: added(one),
+        [forkOf('main')]: 'm1\n', [count('m1')]: '9\n', [diff('m1')]: added(three),
+      },
+    })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'card:tcs')).toContain('Branch TCs 1')
+    expect(seen.ran).toContain(diff('d1'))
+    expect(seen.ran).not.toContain(diff('m1'))
   })
 })

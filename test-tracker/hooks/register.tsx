@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Run, Status, TestRow, View } from '../types'
+import type { BranchTc, Run, Scope, Status, TestRow, View } from '../types'
 
 const PANE = 'test-tracker'
 const TITLE = 'Tests'
@@ -16,8 +16,12 @@ const RESULT_MAX = 30_000 // Bash's own output cap
 const TEST_CMD = /\bclaude plugin test\b|\b(npm|pnpm|yarn|bun)( run)? test\b|\b(pytest|vitest|jest)\b|\b(go|cargo) test\b|tests\/screen\//
 /** pytest writes per test only unbuffered; colour codes would split the markers the parsers read. */
 const ENV = { PYTHONUNBUFFERED: '1', NO_COLOR: '1', FORCE_COLOR: '0' }
-const EMPTY: View = { nextId: 1, runs: [] }
-const view = atom({ plugin: 'test-tracker', key: 'view' } as const, EMPTY)
+/** Trunks a branch is cut from (git-tracker's); on one, there are no branch TCs. */
+const TRUNKS = ['dev', 'develop', 'main', 'master']
+const SCOPES: readonly Scope[] = ['focused', 'branch', 'full']
+const EMPTY: View = { nextId: 1, runs: [], tcSeen: {}, last: {} }
+// shape 2: the card's fields; a stored 0.1.0 value (runs only) reads as absent
+const view = atom({ plugin: 'test-tracker', key: 'view' } as const, EMPTY, { shape: '2' })
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g
 /** A control character in a Text gets the whole pane refused; output is full of them. */
@@ -116,13 +120,41 @@ function tcOf(index: Tc[], name: string, prefix?: string) {
 // ---- a run's output -----------------------------------------------------------------------------------------------
 
 /** What a run keeps outside the store: the line cut at a piece's end, the TC rows, the output Claude gets back. */
-type Live = { carry: string; isPytest: boolean; index: Tc[]; kept: string[]; size: number }
+type Live = { carry: string; isPytest: boolean; index: Tc[]; runLines: string[]; kept: string[]; size: number }
 
 let cwd = '' // the session's; a relative fs path resolves against the host process's, which may differ
 
+const readCases = ($: EngineInterface) => $.fs.read(`${cwd}/${CASES}`).then(String).catch(() => '')
+
+/** The commands of the `run:` header line: each backticked span (`pytest -q` | `npm test` gives two). */
+function runLinesOf(md: string) {
+  const line = md.split('\n').find(l => l.startsWith('run: ')) ?? ''
+  return [...line.matchAll(/`([^`]+)`/g)].map(m => m[1] ?? '')
+}
+
 async function liveFor($: EngineInterface, command: string): Promise<Live> {
-  const md = await $.fs.read(`${cwd}/${CASES}`).then(String).catch(() => '')
-  return { carry: '', isPytest: /\bpytest\b/.test(command), index: tcIndex(md), kept: [], size: 0 }
+  const md = await readCases($)
+  return { carry: '', isPytest: /\bpytest\b/.test(command), index: tcIndex(md), runLines: runLinesOf(md), kept: [], size: 0 }
+}
+
+// ---- scope ----------------------------------------------------------------------------------------------------------
+
+const norm = (s: string) => s.trim().replace(/\s+/g, ' ')
+
+/** Full: one of the run: line's commands. Focused: exactly one pytest node or one TC id. Branch: anything else. */
+// ponytail: -k / -t / --grep may pick many tests, so they guess branch; Claude's scope says focused for those
+function guess(command: string, runLines: string[]): Scope {
+  if (runLines.some(r => norm(r) === norm(command))) return 'full'
+  const nodes = command.match(/\S+::\S+/g) ?? []
+  const tcs = new Set(command.match(/TC-\d+/g) ?? [])
+  return nodes.length === 1 || (nodes.length === 0 && tcs.size === 1) ? 'focused' : 'branch'
+}
+
+/** Claude's scope when it is one of the three, else the guess; a said `full` that is not a run: command is flagged. */
+function scopeOf(said: unknown, command: string, runLines: string[]): Pick<Run, 'scope' | 'scopeNote'> {
+  const guessed = guess(command, runLines)
+  const scope = SCOPES.find(s => s === said) ?? guessed
+  return scope === 'full' && guessed !== 'full' && runLines.length > 0 ? { scope, scopeNote: 'not the run: line' } : { scope }
 }
 
 /** Keeps a line for the result; passing-test lines are the bulk of a log and tell Claude nothing. */
@@ -179,26 +211,31 @@ function trim(runs: Run[]) {
 }
 
 let ticking: ReturnType<EngineInterface['clock']['every']> | undefined
+let tickMs = 0
 
-/** One 1 s redraw while a run runs, for its elapsed time; none otherwise. */
+/** A 1 s redraw while a run runs (elapsed time), a 60 s one while the card shows a `… ago` line, none otherwise. */
 async function tick($: EngineInterface) {
   const v = await read($, view)
-  if (v.runs.some(r => r.exit === undefined)) ticking ??= $.clock.every(1000, () => $.ui.invalidate('ui.render'))
-  else {
-    ticking?.cancel()
-    ticking = undefined
-  }
+  const ms = v.runs.some(r => r.exit === undefined) ? 1000 : Object.keys(v.last).length > 0 ? 60_000 : 0
+  if (ms === tickMs) return
+  ticking?.cancel()
+  ticking = undefined
+  tickMs = ms
+  if (ms > 0) ticking = $.clock.every(ms, () => $.ui.invalidate('ui.render'))
 }
 
-async function begin($: EngineInterface, init: Pick<Run, 'source' | 'command'> & { agent?: string }): Promise<number> {
+type Init = Pick<Run, 'source' | 'command' | 'scope' | 'scopeNote'> & { agent?: string }
+
+async function begin($: EngineInterface, init: Init): Promise<number> {
   const startedAt = await $.clock.now()
   let id = 0
   await update($, view, v => {
     id = v.nextId
     const run: Run = { id, ...init, startedAt, tests: [], counts: { pass: 0, fail: 0, skip: 0 } }
-    return { nextId: v.nextId + 1, runs: trim([run, ...v.runs]) }
+    return { ...v, nextId: v.nextId + 1, runs: trim([run, ...v.runs]) }
   })
   await tick($)
+  void refreshBranch($) // a commit or a new row since the last run changes the branch's TCs
   return id
 }
 
@@ -207,17 +244,112 @@ const patch = ($: EngineInterface, id: number, fn: (r: Run) => Run) =>
 
 const hitAll = (hits: Hit[], index: Tc[]) => (r: Run) => hits.reduce((acc, h) => apply(acc, h, index), r)
 
+/** Each TC's result in one run: fail if any of its rows failed, else pass if any passed, else skip. */
+function tcResults(tests: TestRow[]) {
+  const out: Record<string, Status> = {}
+  for (const t of tests) {
+    if (t.tc === undefined) continue
+    const was = out[t.tc]
+    out[t.tc] = was === 'fail' || t.status === 'fail' ? 'fail' : was === 'pass' || t.status === 'pass' ? 'pass' : 'skip'
+  }
+  return out
+}
+
+/** Ends the run; its TC results and its scope's last result are kept past the history cap. */
 async function finish($: EngineInterface, id: number, end: Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>>) {
   const endedAt = await $.clock.now()
-  await update($, view, v => ({
-    ...v,
-    runs: trim(v.runs.map(r => {
-      if (r.id !== id) return r
-      const { now: _now, ...rest } = r
-      return { ...rest, ...end, endedAt }
-    })),
-  }))
+  await update($, view, v => {
+    const old = v.runs.find(r => r.id === id)
+    if (old === undefined) return v
+    const { now: _now, ...rest } = old
+    const done: Run = { ...rest, ...end, endedAt }
+    const tcSeen = { ...v.tcSeen }
+    for (const [tc, status] of Object.entries(tcResults(done.tests))) tcSeen[tc] = { status, at: endedAt }
+    const last = done.scope === undefined
+      ? v.last
+      : { ...v.last, [done.scope]: { id: done.id, command: done.command, counts: done.counts, exit: done.exit, endedAt } }
+    return { ...v, runs: trim(v.runs.map(r => (r.id === id ? done : r))), tcSeen, last }
+  })
   await tick($)
+  void refreshBranch($)
+}
+
+// ---- the branch's TCs -----------------------------------------------------------------------------------------------
+
+/** feature-tracker's: a git that cannot start reads as a failed command, never a rejection. */
+async function git($: EngineInterface, argv: string[]) {
+  const r = await $.process.run(argv, { cwd: cwd || undefined }).catch(() => undefined)
+  return { ok: r?.exitCode === 0, out: r?.stdout ?? '' }
+}
+
+/** `| TC-n | Feature | … | Code test | Status |` → its id, feature, and whether its code test is `manual`. */
+function caseRow(line: string): BranchTc | undefined {
+  const cells = line.split('|').map(c => c.trim())
+  const id = cells[1] ?? ''
+  if (!/^TC-\d+$/.test(id) || cells.length < 5) return undefined
+  return { id, feature: cells[2] ?? '', isManual: (cells.at(-3) ?? '').replaceAll('`', '') === 'manual' }
+}
+
+/** The fork point of the nearest trunk: the one whose merge-base is fewest commits behind HEAD. */
+async function nearestFork($: EngineInterface) {
+  let best: { sha: string; behind: number } | undefined
+  for (const trunk of TRUNKS) {
+    const mb = await git($, ['git', 'merge-base', 'HEAD', trunk])
+    if (!mb.ok) continue
+    const sha = mb.out.trim()
+    const n = await git($, ['git', 'rev-list', '--count', `${sha}..HEAD`])
+    const behind = Number(n.out.trim())
+    if (n.ok && Number.isFinite(behind) && (best === undefined || behind < best.behind)) best = { sha, behind }
+  }
+  return best?.sha
+}
+
+/** The branch and the TC rows it added or changed since its fork; a trunk has none; outside git, none at all. */
+// ponytail: trunks only; a branch cut from another feature branch also lists the parent's new rows. Copy
+// git-tracker's fewest-ahead parent if that matters.
+async function readBranch($: EngineInterface): Promise<View['branch']> {
+  const head = await git($, ['git', 'rev-parse', '--abbrev-ref', 'HEAD'])
+  const name = head.out.trim()
+  if (!head.ok || name === '') return undefined
+  if (TRUNKS.includes(name)) return { name, tcs: [] }
+  const fork = await nearestFork($)
+  if (fork === undefined) return { name, tcs: [] }
+  const tracked = await git($, ['git', 'ls-files', '--error-unmatch', CASES])
+  // working tree against the fork: rows written before the code count; an untracked file is new on this branch
+  const lines = tracked.ok
+    ? (await git($, ['git', 'diff', '--unified=0', fork, '--', CASES])).out.split('\n').filter(l => l.startsWith('+|')).map(l => l.slice(1))
+    : (await readCases($)).split('\n')
+  const tcs = new Map<string, BranchTc>()
+  for (const line of lines) {
+    const row = caseRow(line)
+    if (row !== undefined && !tcs.has(row.id)) tcs.set(row.id, row)
+  }
+  return { name, tcs: [...tcs.values()] }
+}
+
+let reading: Promise<void> | undefined
+let readAgain = false // a call that came mid-read: one more read covers every such call
+
+/** git-tracker's single flight: a call during a read waits for it plus one more, so an old read never lands last. */
+function refreshBranch($: EngineInterface): Promise<void> {
+  if (reading !== undefined) {
+    readAgain = true
+    return reading
+  }
+  reading = (async () => {
+    do {
+      readAgain = false
+      try {
+        const branch = await readBranch($)
+        await update($, view, v => ({ ...v, branch }))
+      } catch (err) {
+        $.ui.log(`test-tracker: branch read failed: ${String(err)}`, { to: 'debug' })
+      }
+    } while (readAgain)
+  })().finally(() => {
+    reading = undefined
+  })
+  return reading
 }
 
 /** The error without the engine's `<plugin>: $.process.spawn: ` lead. */
@@ -263,11 +395,12 @@ const took = (ms: number) => (ms < 10_000 ? `${(Math.max(0, ms) / 1000).toFixed(
 const ICON: Record<Status, string> = { pass: '✓', fail: '✗', skip: '○' }
 const ICON_COLOR: Record<Status, string> = { pass: 'success', fail: 'error', skip: 'inactive' }
 
-function mark(r: Run): [string, string] {
-  if (r.exit === undefined) return ['▶', 'suggestion']
-  if (r.exit === 'stopped') return ['■', 'inactive']
-  if (r.exit === 'error') return ['!', 'warning']
-  return r.exit === 0 ? ['✓', 'success'] : ['✗', 'error']
+/** A run's mark by how it ended: never `✓` for a run that did not pass. */
+function mark(exit: Run['exit']): [string, string] {
+  if (exit === undefined) return ['▶', 'suggestion']
+  if (exit === 'stopped') return ['■', 'inactive']
+  if (exit === 'error') return ['!', 'warning']
+  return exit === 0 ? ['✓', 'success'] : ['✗', 'error']
 }
 
 /** What the run is doing, or how it ended when that is not a plain exit. */
@@ -289,6 +422,49 @@ function shownRows(r: Run) {
 
 const label = (t: TestRow) => (t.tc === undefined ? t.name : `${t.tc} ${t.name === t.tc ? (t.feature ?? '') : t.name}`)
 
+// ---- the card -------------------------------------------------------------------------------------------------------
+
+const SCOPE_LABEL: Record<Scope, string> = { focused: 'Focused test', branch: 'Branch tests', full: 'Full suite' }
+const LAST_ORDER: readonly Scope[] = ['full', 'branch', 'focused']
+const BAR = 10 // plan-tracker's bar width
+const TC_LINES = 8 // failing then not-run branch TCs listed, the rest as `+k more`
+const bar = (filled: number) => `${'▰'.repeat(filled)}${'▱'.repeat(BAR - filled)}`
+const total = (c: Record<Status, number>) => c.pass + c.fail + c.skip
+
+/** `45s`, `12m`, `3h`, `2d`: how long ago, at a glance. */
+function ago(ms: number) {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  return s < 86_400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86_400)}d`
+}
+
+/** How many tests the run should reach: the newest earlier finished run of the same command. */
+function expectedOf(v: View, r: Run) {
+  const prior = v.runs.find(o => o.id < r.id && o.exit !== undefined && o.command === r.command)
+  if (prior !== undefined) return total(prior.counts)
+  const last = r.scope === undefined ? undefined : v.last[r.scope]
+  return last !== undefined && last.id < r.id && last.command === r.command ? total(last.counts) : undefined
+}
+
+/** `▰▰▰▰▰▱▱▱▱▱ n/N · time`; pytest -q's percent; or the count alone with nothing to measure against. */
+function barLine(v: View, r: Run, now: number) {
+  const n = total(r.counts)
+  const time = r.exit === undefined ? fmt(now - r.startedAt) : took((r.endedAt ?? r.startedAt) - r.startedAt)
+  if (r.percent !== undefined) return `${bar(Math.min(BAR, Math.round(r.percent / 10)))} ${r.percent}% · ${time}`
+  const want = expectedOf(v, r)
+  if (want === undefined || want === 0) return `${n} · ${time}`
+  return `${bar(Math.min(BAR, Math.round((n / want) * BAR)))} ${n}/${want} · ${time}`
+}
+
+/** Each TC's newest result: the finished runs' kept results, the running runs' rows on top. */
+function tcStatus(v: View) {
+  const out: Record<string, Status> = {}
+  for (const [tc, seen] of Object.entries(v.tcSeen)) out[tc] = seen.status
+  for (const r of [...v.runs].reverse()) if (r.exit === undefined) Object.assign(out, tcResults(r.tests))
+  return out
+}
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     cwd = e.cwd
@@ -301,7 +477,16 @@ export const register: Register = on => {
         'the exit code, the counts, the failing tests and the output without its passing-test lines.',
       inputSchema: {
         type: 'object',
-        properties: { command: { type: 'string', description: 'the test command, as you would give it to Bash' } },
+        properties: {
+          command: { type: 'string', description: 'the test command, as you would give it to Bash' },
+          scope: {
+            type: 'string',
+            enum: ['focused', 'branch', 'full'],
+            description:
+              'focused: one test or TC you are working on; branch: this branch\'s tests (the plan\'s new and changed ' +
+              'rows, the areas the diff touches); full: the whole suite, the run: line of tests/TEST_CASES.md',
+          },
+        },
         required: ['command'],
       },
       isDeferred: false,
@@ -310,6 +495,7 @@ export const register: Register = on => {
     // a reload lost the child that fed a running run: it can only read as stopped now
     await update($, view, v => ({ ...v, runs: trim(v.runs.map(r => (r.exit === undefined ? { ...r, exit: 'stopped' as const } : r))) }))
     void $.ui.open({ id: PANE, title: TITLE, columns: DOCK_COLUMNS })
+    void refreshBranch($) // the first prompt never waits on git; the card fills in when it lands
     return next(e)
   })
 
@@ -323,8 +509,10 @@ export const register: Register = on => {
   on('tool.run', { tool: RUN }, async ($, e, next) => {
     const command = String((e as { command?: unknown }).command ?? '').trim()
     if (command === '') return { result: 'run_tests: command is empty' }
-    const id = await begin($, { source: 'tool', command, ...(e.agentId === undefined ? {} : { agent: e.agentId }) })
+    // read before the run starts: its run: line decides the scope the run is born with
     const live = await liveFor($, command)
+    const scope = scopeOf((e as { scope?: unknown }).scope, command, live.runLines)
+    const id = await begin($, { source: 'tool', command, ...scope, ...(e.agentId === undefined ? {} : { agent: e.agentId }) })
     // ponytail: /bin/sh, not the person's zsh; switch if a run line ever needs zsh syntax
     // ponytail: no timeout of its own; Esc stops it. Add timeoutMs if a hung run without Esc ever happens.
     const stop = new Promise<'stop'>(resolve => {
@@ -367,7 +555,10 @@ export const register: Register = on => {
     const command = String(input.command ?? '')
     // ponytail: background Bash untracked; its output lands in a file later and no event says when it ends
     if (input.run_in_background === true || !TEST_CMD.test(command)) return next(e)
-    const id = await begin($, { source: 'bash', command, ...(e.agentId === undefined ? {} : { agent: e.agentId }) })
+    const live = await liveFor($, command)
+    const id = await begin($, {
+      source: 'bash', command, ...scopeOf(undefined, command, live.runLines), ...(e.agentId === undefined ? {} : { agent: e.agentId }),
+    })
     let end: Pick<Run, 'exit'> & Partial<Pick<Run, 'error'>> = { exit: 'error', error: 'the Bash call failed' }
     try {
       const r = await next(e)
@@ -375,7 +566,6 @@ export const register: Register = on => {
         end = { exit: 'stopped' } // refused: it never ran
         return r
       }
-      const live = await liveFor($, command)
       const hits = piece(live, `${outputOf(r)}\n`)
       if (hits.length > 0) await patch($, id, hitAll(hits, live.index))
       end = { exit: r.isError ? 1 : 0 }
@@ -388,7 +578,8 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const v = await read($, view)
-    if (v.runs.length === 0) {
+    const tcs = v.branch?.tcs ?? []
+    if (v.runs.length === 0 && tcs.length === 0) {
       return (
         <Box flexDirection="column">
           <Box key="empty">
@@ -399,11 +590,104 @@ export const register: Register = on => {
     }
     const now = await $.clock.now()
     const newestDone = v.runs.find(r => r.exit !== undefined)?.id
+
+    /** `✓ n  ✗ m  ○ k   what it is doing`, a run's own line and the card's. */
+    const stat = (r: Run) => (
+      <Text wrap="truncate">
+        {'  '}
+        <Text color="success">{`✓ ${r.counts.pass}`}</Text>
+        {'  '}
+        <Text color={r.counts.fail > 0 ? 'error' : 'inactive'}>{`✗ ${r.counts.fail}`}</Text>
+        {r.counts.skip > 0 && <Text color="inactive">{`  ○ ${r.counts.skip}`}</Text>}
+        <Text dimColor>{`   ${printable(doing(r))}`}</Text>
+      </Text>
+    )
+
+    // the card's run: the one running now, else the newest
+    const cr = v.runs.find(r => r.exit === undefined) ?? v.runs[0]
+    const head = [v.branch?.name, cr?.scope === undefined ? undefined : SCOPE_LABEL[cr.scope]].filter(Boolean).join(' · ')
+    const status = tcStatus(v)
+    const tally = { pass: 0, fail: 0, skip: 0 }
+    for (const t of tcs) {
+      const st = status[t.id]
+      if (st !== undefined) tally[st] += 1
+    }
+    const notRun = tcs.length - total(tally)
+    const tcLines = [
+      ...tcs.filter(t => status[t.id] === 'fail').map(t => ({ id: t.id, text: `✗ ${t.id} ${t.feature}`, isFail: true })),
+      ...tcs.filter(t => status[t.id] === undefined).map(t => ({ id: t.id, text: `· ${t.id} ${t.feature}${t.isManual ? ' (manual)' : ''}`, isFail: false })),
+    ]
+    const lasts = LAST_ORDER.flatMap(sc => {
+      const l = v.last[sc]
+      return l === undefined ? [] : [{ sc, l }]
+    })
+
+    const card = (
+      <Box key="card" flexDirection="column" gap={1}>
+        <Box flexDirection="column">
+          {head !== '' && (
+            <Box key="card:head" flexDirection="row" gap={1}>
+              <Box flexGrow={1}>
+                <Text bold wrap="truncate">{printable(head)}</Text>
+              </Box>
+              {cr?.scopeNote !== undefined && (
+                <Box flexShrink={0}>
+                  <Text color="warning">{cr.scopeNote}</Text>
+                </Box>
+              )}
+            </Box>
+          )}
+          {cr !== undefined && (
+            <Box key="card:bar">
+              <Text dimColor wrap="truncate">{barLine(v, cr, now)}</Text>
+            </Box>
+          )}
+          {cr !== undefined && <Box key="card:stat">{stat(cr)}</Box>}
+        </Box>
+        {tcs.length > 0 && (
+          <Box flexDirection="column">
+            <Box key="card:tcs">
+              <Text wrap="truncate">
+                {`Branch TCs ${tcs.length}   ✓ ${tally.pass}  ✗ ${tally.fail}${tally.skip > 0 ? `  ○ ${tally.skip}` : ''}  · ${notRun} not run`}
+              </Text>
+            </Box>
+            {tcLines.slice(0, TC_LINES).map(l => (
+              <Box key={`card:tc:${l.id}`} marginLeft={2}>
+                {l.isFail ? <Text color="error" wrap="truncate">{printable(l.text)}</Text> : <Text dimColor wrap="truncate">{printable(l.text)}</Text>}
+              </Box>
+            ))}
+            {tcLines.length > TC_LINES && (
+              <Box key="card:tc:more" marginLeft={2}>
+                <Text dimColor>{`+${tcLines.length - TC_LINES} more`}</Text>
+              </Box>
+            )}
+          </Box>
+        )}
+        {lasts.length > 0 && (
+          <Box flexDirection="column">
+            {lasts.map(({ sc, l }) => {
+              const [icon, color] = mark(l.exit)
+              return (
+                <Box key={`card:last:${sc}`}>
+                  <Text wrap="truncate">
+                    {`Last ${sc.padEnd(8)} `}
+                    <Text color={color}>{icon}</Text>
+                    <Text dimColor>{` ${l.counts.pass}/${l.counts.pass + l.counts.fail}   ${ago(now - l.endedAt)} ago`}</Text>
+                  </Text>
+                </Box>
+              )
+            })}
+          </Box>
+        )}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column" gap={1}>
+        {card}
         {v.runs.map(r => {
           const isOpen = r.exit === undefined || r.id === newestDone
-          const [icon, color] = mark(r)
+          const [icon, color] = mark(r.exit)
           const c = r.counts
           const time = r.exit === undefined ? fmt(now - r.startedAt) : took((r.endedAt ?? r.startedAt) - r.startedAt)
           const tally = r.exit === undefined ? time : `${c.pass}/${c.pass + c.fail}  ${time}`
@@ -422,18 +706,7 @@ export const register: Register = on => {
                   <Text dimColor>{tally}</Text>
                 </Box>
               </Box>
-              {isOpen && (
-                <Box key={`stat:${r.id}`}>
-                  <Text wrap="truncate">
-                    {'  '}
-                    <Text color="success">{`✓ ${c.pass}`}</Text>
-                    {'  '}
-                    <Text color={c.fail > 0 ? 'error' : 'inactive'}>{`✗ ${c.fail}`}</Text>
-                    {c.skip > 0 && <Text color="inactive">{`  ○ ${c.skip}`}</Text>}
-                    <Text dimColor>{`   ${printable(doing(r))}`}</Text>
-                  </Text>
-                </Box>
-              )}
+              {isOpen && <Box key={`stat:${r.id}`}>{stat(r)}</Box>}
               {isOpen && shownRows(r).map(i => {
                 const t = r.tests[i]
                 return t === undefined ? null : (

@@ -20,6 +20,37 @@ happens:
 ✗ pytest -q                        3/4   2.1s
 ```
 
+### The summary card
+
+At the top of the pane, for the run going now (else the newest one):
+
+```
+feat/test-tracker · Branch tests
+▰▰▰▰▰▰▱▱▱▱ 57/96 · 41s
+  ✓ 57  ✗ 1   now: compose_lists…
+
+Branch TCs 20   ✓ 18  ✗ 1  · 1 not run
+  ✗ TC-235 run_tests result
+  · TC-251 live tab smoke (manual)
+
+Last full     ✓ 232/232   12m ago
+Last branch   ✗ 17/18     3m ago
+```
+
+- **Scope**: `Focused test` (one test or TC being worked on), `Branch tests` (this branch's tests) or
+  `Full suite` (the `run:` line of `tests/TEST_CASES.md`). Claude passes it as `run_tests`'s `scope`;
+  without one, the mod guesses: one of the `run:` line's commands → Full; exactly one pytest node
+  (`path::name`) or one TC id → Focused; anything else (`-k`, `-t` included) → Branch. Claude saying
+  `full` for a command that is not the `run:` line shows `not the run: line`.
+- **Bar**: tests so far against the last finished run of the same command; pytest `-q` uses its own
+  percent; with neither, the count alone.
+- **Branch TCs**: the TC rows this branch added or changed in `tests/TEST_CASES.md` since its fork from
+  the nearest trunk (`dev`, `develop`, `main`, `master`), working tree included; every row when the file
+  is untracked. Each TC is ✗ if any of its tests failed in its newest run, else ✓, else ○ (skipped).
+  Failing, then not-run TCs are listed; `(manual)` marks a smoke row `run_tests` never runs.
+- **Last** lines: each scope's newest finished run, with its own mark (`✓ ✗ ■ !`) and how long ago.
+  They and the TC results outlive the five-run history.
+
 ## Install
 
 ```
@@ -78,6 +109,10 @@ command, this tool cannot.
   markers).
 - Reads `tests/TEST_CASES.md` at the start of each run. Writes nothing to disk; the runs live in the
   session's plugin state.
+- For the card, at session start and at each run's start and end, read-only git through
+  `$.process.run`: `git rev-parse --abbrev-ref HEAD`, `git merge-base HEAD <trunk>` and
+  `git rev-list --count <fork>..HEAD` per trunk, `git ls-files --error-unmatch tests/TEST_CASES.md`,
+  `git diff --unified=0 <fork> -- tests/TEST_CASES.md`.
 
 ## Limits
 
