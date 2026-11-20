@@ -6,3 +6,4 @@ docs/
 plan-tracker/.claude-plugin/types/
 git-tracker/.claude-plugin/types/
 feature-tracker/.claude-plugin/types/
+test-tracker/.claude-plugin/types/

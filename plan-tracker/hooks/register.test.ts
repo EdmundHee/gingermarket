@@ -1070,6 +1070,30 @@ describe('plan-tracker', () => {
     expect(seen.state?.clock?.phase).toBe('dev')
   })
 
+  test('test_tracker_run_counts_as_test_work', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'tests ran']], 'done'))
+    let release!: () => void
+    const ran = new Promise<void>(r => { release = r })
+    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, async () => {
+      await ran
+      return { result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }
+    })
+    // two items: verifying the last one would stop the clock and hide the time card
+    const seen = await start($, on, clocked([[1, 'open'], [2, 'open']], 'dev'), [], T)
+
+    await seen.clock.advance(10 * SEC)
+    const call = $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q' } as never)
+    await seen.clock.advance(5 * SEC)
+    const whileHeld = await timeRow($, 'p1', 'test')
+    release()
+    await call
+    await endTurn($)
+
+    expect(whileHeld).toContain('●')
+    expect(whileHeld).toMatch(/(^|\D)5s$/)
+    expect(calls.n).toBe(1)
+  })
+
   test('acceptance_is_codex_verify_then_edits_are_review_fixes', async ($, on) => {
     const seen = await start($, on, clocked([[1, 'open']], 'test'), [], T)
 
@@ -1299,6 +1323,36 @@ describe('plan-tracker', () => {
     expect(fixes).toContain('●')
     expect(fixes).toMatch(/(^|\D)10s$/)
     expect(await timeRow($, 'p1', 'dev')).toBeUndefined()
+  })
+
+  test('subagent_run_tests_is_test_time_not_main_loop_work', async ($, on) => {
+    const calls = opus(on, () => audit([[1, 'verified', 'x']], 'done'))
+    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, () => ({ result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }))
+    const seen = await start($, on, clocked([[1, 'open'], [2, 'open']], 'dev'), [], T)
+
+    await $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q', agentId: 'sub' } as never)
+    await seen.clock.advance(10 * SEC)
+    const row = await timeRow($, 'p1', 'test')
+    await endTurn($)
+
+    expect(row).toContain('●')
+    expect(row).toMatch(/(^|\D)10s$/)
+    expect(calls.n).toBe(0) // a subagent's call is not the main turn's work: no turn-end audit
+  })
+
+  test('third_work_call_reminds_with_run_tests_counted', async ($, on) => {
+    on('tool.call', { tool: /^mcp__test-tracker__run_tests$/ }, () => ({ result: 'exit 0 · ✓ 1 ✗ 0 · 0.1s' }))
+    await start($, on, seeded([[1, 'open']]))
+    const runTests = () => $.tool.call({ tool: 'mcp__test-tracker__run_tests', command: 'pytest -q' } as never)
+
+    const first = await runTests()
+    const second = await runTests()
+    const third = await runTests()
+
+    expect(reminder(first)).toHaveLength(0)
+    expect(reminder(second)).toHaveLength(0)
+    expect(reminder(third)).toHaveLength(1)
+    expect(reminder(third)[0]).toContain('#1 item 1')
   })
 
   test('subagent_test_run_counts_as_test', async ($, on) => {
