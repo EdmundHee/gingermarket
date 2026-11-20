@@ -1166,3 +1166,19 @@ describe('test-tracker review fixes', () => {
     expect(seen.spawn.cwd[0]).toBe(CWD)
   })
 })
+
+describe('test-tracker smoke findings', () => {
+  test('pytest_verbose_relative_paths_are_not_dots', async ($, on) => {
+    // pytest -v names a test by a relative path before its status: `../../t.py::test_a ` is no dots line
+    const seen = await start($, on, {
+      scripts: { 'pytest -v': { pieces: ['../../t.py::test_a ', 'PASSED [50%]\n../../t.py::test_b ', 'FAILED [100%]\n'], code: 1 } },
+    })
+
+    await run($, 'pytest -v')
+    await seen.settle()
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'stat:1')).toContain('✓ 1')
+    expect(await textOf(pane, 'stat:1')).toContain('✗ 1')
+  })
+})

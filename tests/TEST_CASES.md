@@ -273,6 +273,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-283 | test-tracker: working directory per call | unit | session started at `/elsewhere`; `session.cwd` answers `/repo` | 1. call `run_tests` | the child runs in `/repo` | test-tracker/hooks/register.test.ts > run_uses_the_working_directory_of_its_call | pass |
 | TC-284 | plan-tracker: a subagent's run_tests | unit | group on Dev, two open items | 1. `run_tests` with `agentId` 2. +10 s 3. turn end | Test row `● 10s`; no audit (a subagent's call is not main-loop work) | plan-tracker/hooks/register.test.ts > subagent_run_tests_is_test_time_not_main_loop_work | pass |
 | TC-285 | plan-tracker: reminder counts run_tests | unit | one open item | 1. three `run_tests` calls | the third carries the open-items reminder | plan-tracker/hooks/register.test.ts > third_work_call_reminds_with_run_tests_counted | pass |
+| TC-286 | test-tracker: pytest -v relative paths are no dots | unit | pytest -v names tests `../../t.py::test_a ` before their status | 1. call `run_tests` | `✓ 1  ✗ 1` (the leading `..` of a cut node id is not counted as dots) | test-tracker/hooks/register.test.ts > pytest_verbose_relative_paths_are_not_dots | pass |
 
 ## Rules
 

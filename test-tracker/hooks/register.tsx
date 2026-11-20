@@ -55,7 +55,8 @@ const PY_V = /^(\S+::.+?)\s+(PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)\b/
 const PY_NOW = /^(\S+::.+)$/
 const PY_SUMMARY = /^(?:FAILED|ERROR) (\S+::.+?)(?: - .*)?$/
 const PY_DOTS = /^([.FEsxX]+)\s*(?:\[\s*(\d+)%\])?$/
-const PY_DOTS_SO_FAR = /^[.FEsxX]+/ // a dots line still being written
+// a dots line still being written: the whole cut line, never a prefix (`../../t.py::test_a ` is a node id)
+const PY_DOTS_SO_FAR = /^[.FEsxX]+$/
 const PY_HEADER = /^=+ test session starts =+$/ // pytest under make, tox or a script: its dots count too
 const JEST_FILE = /^(?:PASS|FAIL)\s+(\S+)/
 const JS = /^\s*([✓✔√✗×✕↓○])\s+(.+?)(?:\s+\(?\d+(?:\.\d+)?\s*m?s\)?)?$/
