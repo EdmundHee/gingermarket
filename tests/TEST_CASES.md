@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker ; claude plugin test test-tracker`
-last run: 2026-11-20 · feat/test-tracker acceptance round 2 · validate ✔ · feature-tracker 90/90 · plan-tracker 102/102 · git-tracker 24/24 · test-tracker 53/53 · TC-251 + TC-261 smoke pass
+last run: 2026-11-22 · fix/plan-tracker-fewer-rounds · validate ✔ · feature-tracker 90/90 · plan-tracker 114/114 · git-tracker 24/24 · test-tracker 53/53
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -277,6 +277,18 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-287 | test-tracker card: one node plus another target | unit | — | 1. `run_tests` `pytest t.py::test_a other.py` 2. `run_tests` a script with two TC scripts | both `Branch tests` (Focused needs one target only) | test-tracker/hooks/register.test.ts > card_scope_one_node_plus_another_target_is_branch | pass |
 | TC-288 | test-tracker card: full with no run line | unit | no TEST_CASES.md | 1. `run_tests {command:'bun test', scope:'full'}` | head `Full suite` with `no run: line to check` | test-tracker/hooks/register.test.ts > card_flags_full_scope_with_no_run_line_to_check | pass |
 | TC-289 | test-tracker card: skipped tests in Last | unit | — | 1. full run: 1 pass, 1 skip | `Last full ✓ 1/1  ○ 1` | test-tracker/hooks/register.test.ts > card_last_line_shows_skipped_tests | pass |
+| TC-290 | plan-tracker: audit sees a long turn | unit | one open item; transcript of 70 Bash calls with 800-char outputs, the first one's command holds `FIRST-CALL` | 1. press Verify all | the sonnet prompt contains `FIRST-CALL` | plan-tracker/hooks/register.test.ts > verifier_sees_a_70_call_turn | pass |
+| TC-291 | plan-tracker: no nudge while background work runs | unit | plan turn, 2 open items; audit replies `background`, why `Codex running` | 1. turn start (`Work on plan item #1`) 2. edit 3. turn end | nothing submitted; group note `waiting on background: Codex running`; both items' nudges stay 0 | plan-tracker/hooks/register.test.ts > background_reply_sends_nothing | pass |
+| TC-292 | plan-tracker: reminder pairs the mark with the next call | unit | one open item | 1. three edits | the third's reminder contains `same message as your next tool call` and not `before the next step` | plan-tracker/hooks/register.test.ts > reminder_pairs_mark_with_next_call | pass |
+| TC-293 | plan-tracker: system prompt pairs the mark with the next call | unit | one open item | 1. `prompt.compose` with mark_done in tools | the section contains `same message as your next tool call` and `✓ #<id>` | plan-tracker/hooks/register.test.ts > compose_pairs_mark_with_next_call | pass |
+| TC-294 | plan-tracker: a background wait keeps the nudge allowance | unit | after TC-291's turn, both items still open; next audit replies `partial` | 1. turn start (`Work on plan item #1`) 2. edit 3. turn end | one `Work on plan items #1 #2` prompt; group note cleared; each item's nudges = 1 | plan-tracker/hooks/register.test.ts > partial_after_background_nudges_with_full_allowance | pass |
+| TC-295 | plan-tracker: extraction leaves out tracker steps | unit | — | 1. approve a plan | the opus system prompt contains `Skip steps about the plan tracker itself` | plan-tracker/hooks/register.test.ts > extraction_prompt_skips_tracker_steps | pass |
+| TC-296 | plan-tracker: audit names background and user-only | unit | one open item | 1. edit 2. turn end | the sonnet system prompt contains `"background"` and `needs the user` | plan-tracker/hooks/register.test.ts > audit_prompt_names_background_and_user_only | pass |
+| TC-297 | plan-tracker: a reply mark is a claim | unit | typed turn (not a tracker prompt), items #1 #2 open, no mark_done | 1. edit 2. turn end, answer `done\n✓ #2 tests pass` | #2 `claimed` with claim `tests pass`; the sonnet prompt lists `#2 … (developer claims done: tests pass)`; a `partial` audit sends one prompt for the open items | plan-tracker/hooks/register.test.ts > reply_mark_claims_and_makes_a_plan_turn | pass |
+| TC-298 | plan-tracker: a bare #n in the reply is no claim | unit | typed turn, item #2 open | 1. edit 2. turn end, answer `opened PR #2` | #2 stays `open`; nothing submitted | plan-tracker/hooks/register.test.ts > bare_hash_in_reply_is_no_claim | pass |
+| TC-299 | plan-tracker: Clear done removes finished groups | unit | group p1 all verified, group p2 with one open item | 1. press `clear-done` 2. answer `Clear` | only p2 is left in state and store; `nextId` unchanged; toast `cleared 1 plan` | plan-tracker/hooks/register.test.ts > clear_done_removes_only_finished_groups | pass |
+| TC-300 | plan-tracker: Clear done kept on Keep | unit | group p1 all verified | 1. press `clear-done` 2. answer `Keep` | p1 still there | plan-tracker/hooks/register.test.ts > clear_done_keep_changes_nothing | pass |
+| TC-301 | plan-tracker: no Clear done without finished groups | unit | group p1 with one open item | 1. mount the pane | the pane text has no `Clear done` | plan-tracker/hooks/register.test.ts > clear_done_hidden_without_finished_groups | pass |
 
 ## Rules
 

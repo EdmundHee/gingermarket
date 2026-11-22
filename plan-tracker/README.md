@@ -37,6 +37,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - `✓` on an item marks it verified by hand, for when the verifier is wrong.
 - `Verify all` re-audits every non-verified item in one sonnet call. Never un-verifies.
 - `x` on a group removes it. `extract again` re-reads the plan file when extraction failed.
+- `Clear done` (beside `Verify all`, shown once a group is fully verified) removes every fully verified group
+  after you confirm. Ids keep counting, so an old `#id` never names a new item.
 - `/plan-tracker` opens the pane (needed below 144 columns, where an unasked pane waits);
   `/plan-tracker reset` wipes the tracker for this project; ids keep counting, so an old `#id` never
   names a new item. `/clear` keeps the tracker: it reloads from the project store.
@@ -44,19 +46,24 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - At the end of every turn in which Claude edited a file or ran a command (test-tracker's `run_tests` counts as
   one), the tracker audits the
   open items itself (one sonnet call): it checks each `mark_done` claim, and `✓` marks land even where Claude
-  called no `mark_done`. The audit reads Claude's final reply too, not only the tool calls. A turn you stop with
+  called no `mark_done`. The audit reads Claude's final reply too, not only the tool calls. A reply line
+  `✓ #<id> <evidence>` is a claim, the same as a `mark_done`: Claude ends its reply that way for items its last
+  tool call finished, instead of spending a round on `mark_done`. A bare `#n` (a PR number) is not a claim. A turn you stop with
   Esc is not audited: its claims stay `⚠` until the next audited turn or `Verify all`.
 - When a **plan turn** ends with items unverified, the tracker sends them back on its own. A plan
   turn is the turn a group was added in (any source), a turn started by `▶` or an earlier nudge, or a
-  turn in which Claude called `mark_done`. Claude's reply decides what happens:
-  - blocked on you (asked a question, needs a decision, hit an error it could not fix) → nothing is
-    sent; the group reads `waiting on you: …`.
+  turn in which Claude called `mark_done` or ended its reply with a `✓ #<id>` line. Claude's reply decides what happens:
+  - blocked on you (asked a question, needs a decision, hit an error it could not fix, or an item only you
+    can do or check) → nothing is sent; the group reads `waiting on you: …`.
+  - waiting on a background task (a Codex review, a subagent, a long run) → nothing is sent and no nudge is
+    spent; the group reads `waiting on background: …`. The task's finish wakes Claude anyway.
   - otherwise → one `Work on plan items #a #b` prompt is queued, each item with the verifier's reason.
   - two auto-nudges per item, then the row shows `↻2` and the group asks you to press `▶` or `✓`.
   A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
 - Every third file edit, command or subagent dispatch while items are open adds one reminder line to the tool result,
-  which the model reads and you do not: the open items, and "call mark_done now". A `mark_done`
-  restarts the count, so marks land as the work does, not at the end of the turn.
+  which the model reads and you do not: the open items, and "call mark_done in the same message as your next
+  tool call", never as a round of its own. A `mark_done` restarts the count, so marks land as the work does, not
+  at the end of the turn.
 - **Timing.** Every group keeps its own wall-clock time per phase, shown under its title: one row per phase
   that has time, `●` on the one running, then Total. A fully verified group shows only its total on its one line.
   The phase follows the tool calls:
@@ -86,11 +93,13 @@ cap on items: a list taller than the pane scrolls (arrows or wheel while the pan
 
 One opus call (60 s timeout) per plan-mode approval and per typed task (on its first repo edit, which waits for
 it). One sonnet call (60 s timeout) per `Verify all`, per turn that touched files while items are
-open, and per plan turn (even one that only talked). `mark_done` costs no model call. A plan doc with `### Task` headings costs nothing to extract. Nothing on a
+open, and per plan turn (even one that only talked); its input is up to ~20K tokens of tool calls. `mark_done` costs no model call. A plan doc with `### Task` headings costs nothing to extract. Nothing on a
 read-only typed turn. The mid-turn reminder costs no model call.
 
 ## Where things are kept
 
 Per project, in Claude Code's plugin store (`tracker:<cwd>`), so it survives sessions.
 The verifier reads tool calls from the session transcript, never files or git on its own. A long output
-reaches it as its first 200 and last 600 characters, so a failure at the end of a test run is seen.
+reaches it as its first 200 and last 600 characters, so a failure at the end of a test run is seen. It reads
+the last 120 calls, up to 80,000 characters in all (oldest dropped): about 78 calls at full length, so a long
+turn's early edits still reach it.

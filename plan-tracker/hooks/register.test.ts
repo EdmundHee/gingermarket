@@ -130,8 +130,8 @@ async function start($: Engine, on: On, tracker?: Tracker, messages: unknown[] =
   return seen
 }
 
-/** The main turn ends answered; `agentId` or `reason` override that. */
-const endTurn = ($: Engine, over: { agentId?: string; reason?: 'answer' | 'aborted' | 'error' } = {}) =>
+/** The main turn ends answered; `agentId`, `reason` or `answer` override that. */
+const endTurn = ($: Engine, over: { agentId?: string; reason?: 'answer' | 'aborted' | 'error'; answer?: string } = {}) =>
   $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1', ...over })
 
 const edit = ($: Engine) => $.tool.call({ tool: 'Edit', file_path: '/tmp/a.ts', old_string: 'a', new_string: 'b' })
@@ -1606,5 +1606,182 @@ describe('plan-tracker', () => {
     expect(seen.state?.plans[0]?.time?.dev).toBe(10 * SEC)
     expect(seen.state?.clock?.phase).toBe('waiting')
     expect(await timeRow($, 'p1', 'total')).toMatch(/(^|\D)10s$/)
+  })
+
+  // 0.4.9: fewer rounds to get items verified
+
+  test('verifier_sees_a_70_call_turn', async ($, on) => {
+    const prompts: string[] = []
+    on('model.complete', (_$, e) => {
+      prompts.push(e.prompt)
+      return { value: { isAnswered: true as const, text: audit([[1, 'verified', 'x']], 'done'), usage: USAGE } }
+    })
+    const uses = Array.from({ length: 70 }, (_, n) => ({
+      tool_use_id: `u${n}`, tool: 'Bash', input: { command: n === 0 ? 'FIRST-CALL' : `step ${n}` }, text: 'o'.repeat(800),
+    }))
+    await start($, on, seeded([[1, 'open']]), [{ role: 'assistant', text: '', toolUses: uses }])
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+    await pane.press({ key: 'verify-all' })
+
+    expect(prompts[0]?.includes('FIRST-CALL')).toBe(true) // a 58K-char prompt; toContain would print it whole
+  })
+
+  test('background_reply_sends_nothing', async ($, on) => {
+    opus(on, () => audit([[1, 'unverified', 'no verdict yet'], [2, 'unverified', 'untouched']], 'background', 'Codex running'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(0)
+    expect(seen.state?.plans[0]?.note).toBe('waiting on background: Codex running')
+    expect(seen.state?.plans[0]?.items.map(i => i.nudges ?? 0)).toEqual([0, 0])
+  })
+
+  test('partial_after_background_nudges_with_full_allowance', async ($, on) => {
+    const replies = ['background', 'partial']
+    opus(on, () => audit([[1, 'unverified', 'no verdict yet'], [2, 'unverified', 'untouched']], replies.shift() ?? 'partial', 'Codex running'))
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    await startTurn($)
+    await edit($)
+    await endTurn($)
+
+    expect(seen.submitted).toHaveLength(1)
+    expect(seen.submitted[0]).toMatch(/^Work on plan items #1 #2:/)
+    expect(seen.state?.plans[0]?.note).toBeUndefined()
+    expect(seen.state?.plans[0]?.items.map(i => i.nudges ?? 0)).toEqual([1, 1])
+  })
+
+  test('reminder_pairs_mark_with_next_call', async ($, on) => {
+    await start($, on, seeded([[1, 'open']]))
+
+    await edit($)
+    await edit($)
+    const third = await edit($)
+
+    expect(reminder(third)[0]).toContain('same message as your next tool call')
+    expect(reminder(third)[0]).not.toContain('before the next step')
+  })
+
+  test('compose_pairs_mark_with_next_call', async ($, on) => {
+    await start($, on, seeded([[1, 'open']]))
+
+    const { sections } = await $.prompt.compose({
+      model: 'claude-opus-5-5', promptModel: 'claude-opus-5-5', surfaces: ['terminal'],
+      tools: ['Read', MARK], outputStyle: null, traits: [],
+    })
+
+    const text = sections.find(s => s.id === 'plan-tracker:open')?.text ?? ''
+    expect(text).toContain('same message as your next tool call')
+    expect(text).toContain('✓ #<id>')
+  })
+
+  test('extraction_prompt_skips_tracker_steps', async ($, on) => {
+    const systems: string[] = []
+    opus(on, e => {
+      systems.push(e.system ?? '')
+      return '["edit a"]'
+    })
+    approved(on)
+    await start($, on)
+
+    await $.tool.call({ tool: 'ExitPlanMode' })
+
+    expect(systems[0]).toContain('Skip steps about the plan tracker itself')
+  })
+
+  test('audit_prompt_names_background_and_user_only', async ($, on) => {
+    const systems: string[] = []
+    opus(on, e => {
+      systems.push(e.system ?? '')
+      return audit([[1, 'unverified', 'untouched']])
+    })
+    await start($, on, seeded([[1, 'open']]))
+
+    await edit($)
+    await endTurn($)
+
+    expect(systems[0]).toContain('"background"')
+    expect(systems[0]).toContain('needs the user')
+  })
+
+  test('reply_mark_claims_and_makes_a_plan_turn', async ($, on) => {
+    const prompts: string[] = []
+    on('model.complete', (_$, e) => {
+      prompts.push(e.prompt)
+      const text = audit([[1, 'unverified', 'untouched'], [2, 'unverified', 'no run seen']], 'partial')
+      return { value: { isAnswered: true as const, text, usage: USAGE } }
+    })
+    const seen = await start($, on, seeded([[1, 'open'], [2, 'open']]))
+
+    await startTurn($, 'fix the parser')
+    await edit($)
+    await endTurn($, { answer: 'done\n✓ #2 tests pass' })
+
+    expect(seen.state?.plans[0]?.items[1]).toMatchObject({ status: 'claimed', claim: 'tests pass' })
+    expect(prompts[0]).toContain('#2: item 2 (developer claims done: tests pass)')
+    expect(seen.submitted).toHaveLength(1)
+  })
+
+  test('bare_hash_in_reply_is_no_claim', async ($, on) => {
+    opus(on, () => audit([[2, 'unverified', 'untouched']], 'partial'))
+    const seen = await start($, on, seeded([[1, 'verified'], [2, 'open']]))
+
+    await startTurn($, 'open the PR')
+    await edit($)
+    await endTurn($, { answer: 'opened PR #2' })
+
+    expect(seen.state?.plans[0]?.items[1]?.status).toBe('open')
+    expect(seen.submitted).toHaveLength(0)
+  })
+
+  /** p2 with one open item on top, p1 fully verified under it. */
+  const mixed = (): Tracker => {
+    const done = seeded([[1, 'verified'], [2, 'verified']]).plans[0]
+    return {
+      nextId: 4,
+      plans: [
+        { id: 'p2', title: 'Open', file: '', approvedAt: '2026-10-09T00:00:00.000Z', items: [{ id: 3, text: 'item 3', status: 'open' }] },
+        ...(done ? [done] : []),
+      ],
+    }
+  }
+
+  test('clear_done_removes_only_finished_groups', async ($, on) => {
+    asked(on, 'Clear')
+    const seen = await start($, on, mixed())
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    await pane.press({ key: 'clear-done' })
+
+    expect(seen.state?.plans.map(p => p.id)).toEqual(['p2'])
+    expect(seen.store.get(KEY)).toEqual(seen.state)
+    expect(seen.state?.nextId).toBe(4)
+    expect(seen.toasts).toContain('cleared 1 plan')
+  })
+
+  test('clear_done_keep_changes_nothing', async ($, on) => {
+    asked(on, 'Keep')
+    const seen = await start($, on, seeded([[1, 'verified'], [2, 'verified']]))
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    await pane.press({ key: 'clear-done' })
+
+    expect(seen.state?.plans.map(p => p.id)).toEqual(['p1'])
+    expect((seen.store.get(KEY) as Tracker | undefined)?.plans.map(p => p.id)).toEqual(['p1'])
+  })
+
+  test('clear_done_hidden_without_finished_groups', async ($, on) => {
+    await start($, on, seeded([[1, 'open']]))
+
+    const pane = await $.ui.mount({ plugin: 'plan-tracker', surface: 'terminal', component: 'Pane', requestId: 'plan-tracker', props: PANE })
+
+    expect(await pane.find({ key: 'clear-done' })).toBeUndefined()
   })
 })
