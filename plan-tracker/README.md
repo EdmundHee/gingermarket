@@ -38,7 +38,8 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - `Verify all` re-audits every non-verified item in one sonnet call. Never un-verifies.
 - `x` on a group removes it. `extract again` re-reads the plan file when extraction failed.
 - `Clear done` (beside `Verify all`, shown once a group is fully verified) removes every fully verified group
-  after you confirm. Ids keep counting, so an old `#id` never names a new item.
+  after you confirm. Ids keep counting, so an old `#id` never names a new item, and approving a cleared plan's
+  text again adds nothing (the last 200 cleared plans are remembered).
 - `/plan-tracker` opens the pane (needed below 144 columns, where an unasked pane waits);
   `/plan-tracker reset` wipes the tracker for this project; ids keep counting, so an old `#id` never
   names a new item. `/clear` keeps the tracker: it reloads from the project store.
@@ -53,10 +54,13 @@ the installed copy is read from the folder, so `/reload-plugins` picks up edits.
 - When a **plan turn** ends with items unverified, the tracker sends them back on its own. A plan
   turn is the turn a group was added in (any source), a turn started by `▶` or an earlier nudge, or a
   turn in which Claude called `mark_done` or ended its reply with a `✓ #<id>` line. Claude's reply decides what happens:
-  - blocked on you (asked a question, needs a decision, hit an error it could not fix, or an item only you
-    can do or check) → nothing is sent; the group reads `waiting on you: …`.
+  - blocked on you (asked a question, needs a decision, hit an error it could not fix) → nothing is
+    sent; the group reads `waiting on you: …`.
+  - an item only you can do or check (a manual check, an approval) reads `needs you: …` and is left out of
+    every nudge; the rest of the group is still sent back.
   - waiting on a background task (a Codex review, a subagent, a long run) → nothing is sent and no nudge is
-    spent; the group reads `waiting on background: …`. The task's finish wakes Claude anyway.
+    spent; the group reads `waiting on background: …`. The task's finish wakes Claude, and that turn counts as
+    plan work on the group, so its end audits and nudges again. A finish never counts as a typed task.
   - otherwise → one `Work on plan items #a #b` prompt is queued, each item with the verifier's reason.
   - two auto-nudges per item, then the row shows `↻2` and the group asks you to press `▶` or `✓`.
   A typed prompt breaks the chain; `▶` re-enters it. `Verify all` never sends anything.
