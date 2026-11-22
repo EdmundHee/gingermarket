@@ -23,6 +23,9 @@ const PLAN_DOC = /\/docs\/superpowers\/plans\/[^/]+\.md$/
 const SOURCES = [['docs', 'PLAN DOCS'], ['mode', 'PLAN MODE'], ['tasks', 'TASKS']] as const
 const sourceOf = (p: PlanGroup) => (p.file === '' ? 'tasks' : PLAN_DOC.test(p.file) ? 'docs' : 'mode')
 const NUDGES = 2 // auto-nudges per item before the pane asks for you
+/** A group's note while it waits on a background task; the task's finish (a `<task-notification>` turn) resumes it. */
+const BG_NOTE = 'waiting on background: '
+const NOTICE = /^\s*<task-notification>/
 const WORK_PROMPT = /^Work on plan items? ((?:#\d+ ?)+):/
 let worked = 0 // main-loop WORK calls in the running turn
 const REMIND_EVERY = 3 // ponytail: one reminder per 3 work calls; drop to 1 if marks still arrive late
@@ -52,22 +55,25 @@ const TEST_CMD = /\bclaude plugin (test|validate)\b|\b(npm|pnpm|yarn|bun)( run)?
 const EXTRACT =
   "You extract a checklist from an implementation plan or a developer's task request. Return ONLY a JSON array of " +
   'strings: each one concrete deliverable or verification step a developer ticks off, in order, at most 120 ' +
-  'characters each. Skip context, background and rejected alternatives. Return [] when it asks for no new change.'
+  'characters each. Skip context, background and rejected alternatives. Skip steps about the plan tracker itself ' +
+  '(calling mark_done, recording plan-tracker marks). Return [] when it asks for no new change.'
 const AUDIT =
   'You audit which plan items were completed, from the recent tool calls (file edits, commands, outputs) and the ' +
   "developer's final reply. Reply ONLY with JSON " +
-  '{"items":[{"id":<number>,"verdict":"verified"|"unverified","reason":"<at most 100 characters>"}],' +
-  '"reply":"done"|"partial"|"blocked","why":"<at most 100 characters>"}, one items entry per item given. ' +
-  '"verified" only when the tool calls show the work; a claim alone is not evidence. ' +
+  '{"items":[{"id":<number>,"verdict":"verified"|"unverified"|"user","reason":"<at most 100 characters>"}],' +
+  '"reply":"done"|"partial"|"blocked"|"background","why":"<at most 100 characters>"}, one items entry per item given. ' +
+  '"verified" only when the tool calls show the work; a claim alone is not evidence. "user" when the item is not ' +
+  'done and needs the user (a manual check, an approval, something only the user can see). ' +
   '"reply": "blocked" when the developer asked the user a question, needs a decision, or hit an error they could not fix; ' +
+  '"background" when they are waiting on a background task (Codex, a subagent, a long run) to finish; ' +
   '"partial" when they stopped with work left or offered to continue; "done" when they say everything is finished.'
 
-type Verdict = { id?: number; verdict: 'verified' | 'unverified'; reason: string }
-type Audit = { items: Verdict[]; reply?: 'done' | 'partial' | 'blocked'; why?: string }
+type Verdict = { id?: number; verdict: 'verified' | 'unverified' | 'user'; reason: string }
+type Audit = { items: Verdict[]; reply?: 'done' | 'partial' | 'blocked' | 'background'; why?: string }
 
 const isStrings = (v: unknown): v is string[] => Array.isArray(v) && v.every(x => typeof x === 'string')
 const isVerdict = (v: unknown): v is Verdict =>
-  typeof v === 'object' && v !== null && ['verified', 'unverified'].includes(String((v as Verdict).verdict))
+  typeof v === 'object' && v !== null && ['verified', 'unverified', 'user'].includes(String((v as Verdict).verdict))
 const isAudit = (v: unknown): v is Audit => typeof v === 'object' && v !== null && Array.isArray((v as Audit).items)
 
 /** One model call, parsed as JSON; undefined when it did not answer or answered prose. */
@@ -242,12 +248,42 @@ function findItem(t: Tracker, id: number) {
   return undefined
 }
 
+/** Item `id` claimed done with `text` (a mark_done or a reply mark): the old audit note goes; on the main loop the clock follows its group. */
+function claim(t: Tracker, now: number, id: number, text: string, main: boolean): Tracker {
+  const found = findItem(t, id)
+  if (!found || found.item.status === 'verified') return t
+  const { note: _note, ...item } = found.item
+  const claimed: PlanItem = { ...item, status: 'claimed', claim: text.slice(0, 300) }
+  const next = { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
+  return main ? retarget(next, now, found.plan.id) : next
+}
+
+/** `✓ #<id> <evidence>` lines in Claude's final reply: items its last tool call finished, claimed without a mark_done round. */
+// [ \t], not \s: a mark never reads the next line. A bullet, a list number, bold, ✔ or ✅ and `#2 #3` all count.
+// ponytail: a line `✓ #57 merged` with #57 open claims it; the audit still checks the evidence, so it costs one check
+const REPLY_MARK = /^[ \t]*(?:[-*]|\d+\.)?[ \t]*(?:\*\*)?[ \t]*[✓✔✅]\uFE0F?[ \t]*((?:#\d+\b[ \t,]*)+)(?:\*\*)?[ \t:—-]*(.*)$/gm
+const FENCE = /```[\s\S]*?```/g // an example in a code block is not a claim
+
+/** Claims the reply marks of a final reply that name a non-verified item; they make the turn a plan turn, as a mark_done does. */
+async function replyMarks($: EngineInterface, answer: string) {
+  const t = await read($, tracker)
+  const marks = [...answer.replace(FENCE, '').matchAll(REPLY_MARK)]
+    .flatMap(m => (m[1]?.match(/\d+/g) ?? []).map(id => ({ id: Number(id), text: (m[2] ?? '').trim() || 'marked in the reply' })))
+    .filter(m => { const f = findItem(t, m.id); return f !== undefined && f.item.status !== 'verified' })
+  const last = marks[marks.length - 1]
+  if (!last) return
+  planTurn = true
+  activePlan = findItem(t, last.id)?.plan.id ?? activePlan
+  await save($, (s, now) => marks.reduce((acc, m) => claim(acc, now, m.id, m.text, true), s))
+}
+
 /** Head and tail of a long output: commands echo at the start, failures and summaries land at the end. */
 const clip = (s: string, head = 200, tail = 600) => (s.length > head + tail ? `${s.slice(0, head)} … ${s.slice(-tail)}` : s)
 
 /** The recent tool calls as the verifier's evidence, the tracker's own left out. */
 // ponytail: transcript tool uses, not git diff; add `git diff --stat` when the verifier misses file work
-// ponytail: 800 chars per output, 24000 in all (oldest dropped); a failure mid-way through a huge log is still cut
+// ponytail: 800 chars per output, 80000 in all (oldest dropped): ~78 calls at full length, ~95 at 800-char outputs.
+// A longer turn loses its oldest calls; per-item evidence (the calls before each mark) is the upgrade if that bites.
 async function evidence($: EngineInterface, last: number) {
   const messages = await $.session.messages()
   if (!Array.isArray(messages)) return '(transcript unavailable)'
@@ -256,7 +292,9 @@ async function evidence($: EngineInterface, last: number) {
     const out = clip((u.text ?? '').replace(/\s+/g, ' '))
     return `${u.tool} ${JSON.stringify(u.input).slice(0, 200)} → ${out}${u.isError ? ' [error]' : ''}`
   })
-  return lines.join('\n').slice(-24000) || '(no tool calls yet)'
+  const text = lines.join('\n')
+  // cut whole records only: a record cut at its start would reach the audit without its tool and command
+  return (text.length > 80000 ? text.slice(text.indexOf('\n', text.length - 80000) + 1) : text) || '(no tool calls yet)'
 }
 
 // ponytail: no item cap; 4096 tokens is room for ~100 items, the pane scrolls (engine-owned) past bodyRows
@@ -286,7 +324,12 @@ async function addPlan(
 ) {
   const hash = hashOf(planText)
   // the same text approved again (re-shown after /compact) keeps its group, so Claude's ids stay valid
-  const same = (await read($, tracker)).plans.find(p => p.hash === hash && p.items.length > 0)
+  const known = await read($, tracker)
+  if (known.cleared?.includes(hash)) {
+    $.ui.toast(`tracker: "${title}" was finished and cleared`)
+    return undefined
+  }
+  const same = known.plans.find(p => p.hash === hash && p.items.length > 0)
   if (same) {
     $.ui.toast(`tracker: "${title}" already tracked`)
     return same.id
@@ -354,6 +397,25 @@ async function reextract($: EngineInterface, plan: PlanGroup) {
   })
 }
 
+/** The `Clear done` button: drops every fully verified group once the user confirms; ids keep counting. */
+async function clearDone($: EngineInterface) {
+  // the groups the dialog counts: one that finishes while it is open is not cleared unseen
+  const ids = (await read($, tracker)).plans.filter(isDone).map(p => p.id)
+  if (ids.length === 0) return
+  const plans = (k: number) => `${k} finished ${k === 1 ? 'plan' : 'plans'}`
+  const answer = await $.ui.ask(`Clear ${plans(ids.length)}?`, ['Clear', 'Keep']).catch(() => 'Keep')
+  if (answer !== 'Clear') return
+  let cleared = 0
+  await save($, t => {
+    const gone = t.plans.filter(p => ids.includes(p.id) && isDone(p))
+    cleared = gone.length
+    // ponytail: last 200 hashes kept, so a cleared plan approved again stays gone; older ones can come back
+    const hashes = gone.flatMap(p => (p.hash ? [p.hash] : []))
+    return { ...t, plans: t.plans.filter(p => !gone.includes(p)), cleared: [...(t.cleared ?? []), ...hashes].slice(-200) }
+  })
+  $.ui.toast(`cleared ${cleared} ${cleared === 1 ? 'plan' : 'plans'}`)
+}
+
 /** Queues one prompt sending Claude to the given items of `plan`; those already queued are left out. */
 async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?: string) {
   const fresh = items.filter(i => !queued.has(i.id))
@@ -368,7 +430,9 @@ async function work($: EngineInterface, plan: PlanGroup, items: PlanItem[], why?
     `Work on plan item${fresh.length > 1 ? 's' : ''} ${ids}:\n${rows}\n` +
     `Plan "${plan.title}" (${plan.file}); read it for context if needed.` +
     (why ? ` Your last reply read as: ${why}.` : '') +
-    ' Finish each item, then call mark_done with its id and one line of evidence. If one is impossible or already done, say which and why.'
+    ' Finish each item and mark it: mark_done (its id and one line of evidence) in the same message as your next tool ' +
+    'call, or for items your last tool call finished, a `✓ #<id> <evidence>` line at the end of your reply. ' +
+    'If one is impossible or already done, say which and why.'
   await $.prompt.submit({ text })
   $.ui.toast(`sent ${ids}`)
 }
@@ -409,8 +473,8 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
   const pending = openItems(before)
   const list = pending.map(i => `#${i.id}: ${i.text}${i.status === 'claimed' ? ` (developer claims done: ${i.claim ?? ''})` : ''}`).join('\n')
   const prompt =
-    `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 80)}\n\n` +
-    `Developer's final reply:\n${(opts.reply || '(none)').slice(0, 4000)}`
+    `Items:\n${list}\n\nRecent tool calls:\n${await evidence($, 120)}\n\n` +
+    `Developer's final reply:\n${clip(opts.reply || '(none)', 1000, 3000)}` // the end says what is left and why
   const answer = await ask($, 'sonnet', AUDIT, prompt, 4096)
   const audit = isAudit(answer) ? answer : undefined
   const verdicts = audit?.items.filter(isVerdict) ?? []
@@ -419,7 +483,8 @@ async function verifyAll($: EngineInterface, opts: { quiet?: boolean; reply?: st
     for (const v of verdicts) {
       const found = findItem(next, Number(v.id))
       if (!found || found.item.status === 'verified') continue
-      next = setItem(next, found.item.id, v.verdict === 'verified' ? { status: 'verified', note: v.reason } : { note: v.reason })
+      next = setItem(next, found.item.id, v.verdict === 'verified' ? { status: 'verified', note: v.reason, user: false }
+        : v.verdict === 'user' ? { note: `needs you: ${v.reason}`, user: true } : { note: v.reason, user: false })
     }
     return next
   })
@@ -443,9 +508,12 @@ async function nudge($: EngineInterface, audit: Audit | undefined) {
     await save($, s => setGroupNote(s, plan.id, text))
     $.ui.toast(`tracker: ${text}`)
   }
+  // the task's finish wakes Claude anyway; a nudge now only spends the allowance on "still waiting"
+  if (audit.reply === 'background') return note(`${BG_NOTE}${audit.why ?? 'a background task'}`)
   if (audit.reply === 'blocked') return note(`waiting on you: ${audit.why ?? 'Claude asked a question'}`)
-  const able = left.filter(i => (i.nudges ?? 0) < NUDGES)
-  if (able.length === 0) return note(`${left.map(i => `#${i.id}`).join(' ')} need you (auto-nudge limit); press ▶ or ✓`)
+  const able = left.filter(i => !i.user && (i.nudges ?? 0) < NUDGES)
+  const capped = left.some(i => !i.user)
+  if (able.length === 0) return note(`${left.map(i => `#${i.id}`).join(' ')} need you${capped ? ' (auto-nudge limit)' : ''}; press ▶ or ✓`)
   await save($, s => able.reduce((next, i) => setItem(next, i.id, { nudges: (i.nudges ?? 0) + 1 }), setGroupNote(s, plan.id, undefined)))
   await work($, plan, able, audit.why)
 }
@@ -509,7 +577,16 @@ export const register: Register = on => {
       return back.clock ? { ...back, clock: clock as Clock } : back
     })
     const ids = (WORK_PROMPT.exec(e.text)?.[1]?.match(/\d+/g) ?? []).map(Number)
-    prompt = ids.length || !e.text.trim() ? '' : e.text // the tracker's own prompts and continuations never count
+    const notice = NOTICE.test(e.text)
+    // the tracker's own prompts, continuations and background finishes never count as a typed task
+    prompt = ids.length || notice || !e.text.trim() ? '' : e.text
+    const waiting = notice ? (await read($, tracker)).plans.find(p => p.note?.startsWith(BG_NOTE)) : undefined
+    if (waiting) {
+      // the wait is over: this turn is plan work on that group, so its end audits and nudges again
+      planTurn = true
+      activePlan = waiting.id
+      await save($, (t, now) => retarget(t, now, activePlan))
+    }
     if (ids.length) {
       planTurn = true
       ids.forEach(id => queued.delete(id))
@@ -547,8 +624,10 @@ export const register: Register = on => {
     const rows = open.slice(0, 10).map(i => `#${i.id} ${i.text.slice(0, 60)}`).join(' · ')
     const more = open.length > 10 ? ` +${open.length - 10} more` : ''
     const line =
-      `plan-tracker: still open: ${rows}${more}. If this call finished one of them, call mark_done now ` +
-      '(its id + one line of evidence) before the next step. Never batch marks at the end of the turn.'
+      `plan-tracker: still open: ${rows}${more}. If this call finished one of them, call mark_done (its id + one line ` +
+      'of evidence) in the same message as your next tool call, not as a step of its own. If it was your last call, ' +
+      'end your reply with `✓ #<id> <evidence>` instead. Never save earlier marks up for the end of the turn, ' +
+      'and never mark what you have not done.'
     return { ...r, context: [...(r.context ?? []), line] }
   })
 
@@ -557,6 +636,8 @@ export const register: Register = on => {
   on('turn.complete', async ($, e, next) => {
     const r = await next(e)
     if (e.agentId !== undefined) return r
+    // before the pause below: a reply mark retargets the clock, and the pause then covers that group too
+    if (e.reason === 'answer') await replyMarks($, e.answer ?? '')
     // any end, Esc included: the user has the floor; a background Codex run still counts as Codex
     await onClock($, (t, now) => (t.clock?.bg && (t.clock.phase === 'review' || t.clock.phase === 'verify') ? t : wait(t, now)))
     if (e.reason !== 'answer' || (worked === 0 && !planTurn)) return r
@@ -582,10 +663,12 @@ export const register: Register = on => {
       if (text) {
         const at = await $.clock.now() // before the extraction: its seconds are Dev, not Plan
         const id = await addPlan($, text, file)
-        activePlan = id
-        planTurn = true
         prompt = ''
-        if (id) await save($, t => attach(t, at, id))
+        if (id) {
+          activePlan = id
+          planTurn = true
+          await save($, t => attach(t, at, id))
+        }
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -616,10 +699,12 @@ export const register: Register = on => {
       const text = file ? await $.fs.read(file) : ''
       if (file && text) {
         const id = await addPlan($, text, file)
-        activePlan = id
-        planTurn = true
         prompt = ''
-        if (id) await save($, (t, now) => attach(t, now, id))
+        if (id) {
+          activePlan = id
+          planTurn = true
+          await save($, (t, now) => attach(t, now, id))
+        }
       }
     } catch (err) {
       $.ui.log(`plan-tracker: ${String(err)}`, { to: 'debug' })
@@ -643,13 +728,7 @@ export const register: Register = on => {
     }
     if (found.item.status === 'verified') return { result: `Item #${id} is already verified.` }
     // no model call here: the turn-end audit checks every claim in its one call
-    const main = e.agentId === undefined
-    await save($, (t, now) => {
-      const { note: _note, ...item } = found.item
-      const claimed: PlanItem = { ...item, status: 'claimed', claim: String(e.evidence ?? '').slice(0, 300) }
-      const next = { ...t, plans: t.plans.map(p => ({ ...p, items: p.items.map(i => (i.id === id ? claimed : i)) })) }
-      return main ? retarget(next, now, found.plan.id) : next // the clock follows the group Claude works on
-    })
+    await save($, (t, now) => claim(t, now, id, String(e.evidence ?? ''), e.agentId === undefined))
     return { result: `Item #${id} noted. The audit at the end of this turn checks it against your tool calls.` }
   })
 
@@ -668,7 +747,9 @@ export const register: Register = on => {
       '# Plan tracker',
       'Items from tracked plans and tasks still open in this project:',
       ...lines,
-      'Call mark_done right after you finish each item, before starting the next, with its id and one line of evidence. Never mark what you have not done.',
+      'Finished an item? Call mark_done (its id and one line of evidence) in the same message as your next tool call, ' +
+      'not as a step of its own. Items your last tool call finished need no mark_done: end your reply with one line ' +
+      'per item, `✓ #<id> <evidence>`. Never mark what you have not done.',
     ].join('\n')
     return { sections: [...r.sections, { id: 'plan-tracker:open', text, scope: 'session' }] }
   })
@@ -822,8 +903,13 @@ export const register: Register = on => {
             </Box>
           )
         })}
-        {pending && (
-          <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
+        {(pending || t.plans.some(isDone)) && (
+          <Box key="actions" flexDirection="row" gap={1}>
+            {pending && (
+              <Button key="verify-all" variant="primary" onPress={() => void verifyAll($)}>{t.busy === 'verify' ? 'verifying…' : 'Verify all'}</Button>
+            )}
+            {t.plans.some(isDone) && <Button key="clear-done" onPress={() => void clearDone($)}>Clear done</Button>}
+          </Box>
         )}
       </Box>
     )
