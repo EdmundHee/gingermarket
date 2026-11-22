@@ -1,7 +1,8 @@
 export type PlanItemStatus = 'open' | 'claimed' | 'verified'
 
-// claim: mark_done's evidence line, read by the audit; note: the audit's reason (or 'by you')
-export type PlanItem = { id: number; text: string; status: PlanItemStatus; claim?: string; note?: string; nudges?: number }
+// claim: mark_done's (or a reply mark's) evidence line, read by the audit; note: the audit's reason (or 'by you');
+// user: the audit said only the user can do or check it, so nudges skip it
+export type PlanItem = { id: number; text: string; status: PlanItemStatus; claim?: string; note?: string; nudges?: number; user?: boolean }
 
 /** A phase of the work, as the tool calls show it. `waiting`: paused while the user has the floor, never counted. */
 export type Phase = 'plan' | 'review' | 'dev' | 'fixes' | 'test' | 'verify' | 'waiting'
@@ -27,7 +28,8 @@ export type PlanGroup = {
  */
 export type Clock = { group?: string; phase: Phase; since: number; resume?: Phase; bg?: true; session?: string }
 
-export type Tracker = { nextId: number; plans: PlanGroup[]; busy?: 'extract' | 'verify'; pending?: Times; clock?: Clock }
+/** `cleared`: hashes of plans removed by Clear done; approving the same text again adds nothing. */
+export type Tracker = { nextId: number; plans: PlanGroup[]; busy?: 'extract' | 'verify'; pending?: Times; clock?: Clock; cleared?: string[] }
 
 declare module 'claude-code' {
   interface PluginState {
