@@ -4,7 +4,7 @@
     "name": "Edmund Hee"
   },
   "metadata": {
-    "description": "Claude Code plugins by Edmund Hee: plan, git, feature and test panes beside the chat, and a plan-aware orchestrator for ralph-loop, and raven, an AI PM/CTO loop over Codex and Claude."
+    "description": "Claude Code plugins by Edmund Hee: plan, git, feature and test panes beside the chat, an overview pane of plan, git and tests, and a plan-aware orchestrator for ralph-loop, and raven, an AI PM/CTO loop over Codex and Claude."
   },
   "plugins": [
     {
@@ -31,6 +31,11 @@
       "name": "test-tracker",
       "source": "./test-tracker",
       "description": "Tests pane beside plan-tracker: every test run as it happens, each test ticked pass or fail live with its TC id, the test running now, elapsed time and the last five runs; Claude runs tests through its run_tests tool, plain Bash test commands show their results at the end."
+    },
+    {
+      "name": "overview",
+      "source": "./overview",
+      "description": "Overview pane beside plan-tracker: one tab with three rows, the plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, and the test card from test-tracker; reads their state, runs nothing."
     },
     {
       "name": "raven",
