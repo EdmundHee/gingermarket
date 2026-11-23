@@ -129,7 +129,7 @@ describe('overview', () => {
     const seen = await start($, on)
 
     expect(seen.opened).toHaveLength(1)
-    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48 })
+    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48, focus: true })
     expect(seen.commands).toContain('overview')
   })
 
@@ -142,7 +142,7 @@ describe('overview', () => {
     })
 
     expect(seen.opened).toHaveLength(1)
-    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48 })
+    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48, focus: true })
     expect(ran).toMatchObject({ text: 'Overview pane opened.' })
   })
 

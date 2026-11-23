@@ -168,17 +168,21 @@ function tcStatus(v: View) {
 
 const PR_COLOR: Record<string, string> = { open: 'success', draft: 'inactive', merged: 'merged', closed: 'error' }
 
+// `focus` is the only open that raises a pane: one without it leaves the tab behind the last one opened (Features opens
+// after every plugin below it has started). It takes the keyboard at an empty prompt, and typing still lands there.
+const OPEN = { id: PANE, title: 'Overview', columns: DOCK_COLUMNS, focus: true } as const
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Open the Overview pane: plan, git and tests in one tab' })
-    void $.ui.open({ id: PANE, title: 'Overview', columns: DOCK_COLUMNS })
+    void $.ui.open(OPEN)
     // a reload stops the old timer and runs this again; /clear keeps it
     $.clock.every(1_000, () => tick($))
     return next(e)
   })
 
   on('command.run', { command: PANE }, async $ => {
-    const opened = await $.ui.open({ id: PANE, title: 'Overview', columns: DOCK_COLUMNS })
+    const opened = await $.ui.open(OPEN)
     return { text: opened.isPlaced ? 'Overview pane opened.' : `Overview pane waits: ${opened.reason}` }
   })
 

@@ -53,6 +53,11 @@ feature-tracker, ravenquill, overview, plan-tracker, git-tracker, test-tracker).
 in is its own, not a setting Overview controls. If a tracker's tab comes first, close the trackers' tabs and reopen
 them with `/plan-tracker`, `/git-tracker`, `/test-tracker`: they open after Overview.
 
+Overview is also the tab shown at start. It opens with `focus`, the only open that brings a pane to the front;
+without it the last tab to open (Features) is shown. `focus` gives the pane the keyboard while the prompt is empty,
+but typing still lands in the prompt. With text already in the prompt, or a dialog up, Claude Code refuses the focus
+and the pane opens behind. `/overview` brings it to the front the same way.
+
 ## Needs
 
 plan-tracker, git-tracker and test-tracker, installed and enabled: `plugin.json` lists them under `dependencies`. A
