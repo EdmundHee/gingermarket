@@ -42,8 +42,14 @@ Last branch   ✗ 52/53   2m ago
 - **Tests**: test-tracker's summary card: the run going now (else the newest), branch TCs, the last run per scope.
   The run history stays in the Tests tab.
 
-The pane opens at session start; `/overview` opens it again. Times tick each second while a plan phase or a test run
-runs.
+The pane opens at session start; `/overview` opens it again. Rows are split by a dim rule, each row's title in its own
+color (Plan teal, Git orange, Tests blue). Times tick each second while a plan phase or a test run runs.
+
+### Making it the first tab
+
+Tabs follow the order panes open, and plugins start in the order of `enabledPlugins` in `~/.claude/settings.json`
+(install order). Installed after the trackers, Overview opens last. To make it the first tab, move
+`"overview@gingermarket": true` above `plan-tracker@gingermarket` in `enabledPlugins` and restart.
 
 ## Needs
 
@@ -54,7 +60,7 @@ row whose tracker has no data yet shows a one-line empty state (`No plan tracked
 ## What it runs and writes
 
 Nothing. It reads the three trackers' session state (any plugin may read another's; only the owner writes it) and
-redraws when they write or tick. No git, gh, test command or model call of its own.
+redraws when they write, plus a 1 s timer of its own while a clock runs. No git, gh, test command or model call.
 
 ## Install
 

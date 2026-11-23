@@ -300,126 +300,67 @@ describe('overview', () => {
     expect(await textOf(pane, 'card:last:branch')).toContain('!')
   })
 
-  // The trackers' 1 s ticks, standing in: each redraws only its own panes; Overview follows them, no redraw call here.
-  // An inline plugin has no closure over this file (gotcha-test-kit-spawn-fake-inline-plugin-text-keys): literals only.
-  test(
-    'plan_total_advances_on_screen_and_stops_when_waiting',
-    {
-      plugins: [{
-        name: 'plan-tracker',
-        register(on) {
-          on('session.start', ($, e, next) => {
-            $.clock.every(1_000, () => $.ui.invalidate('ui.render'))
-            return next(e)
-          })
-        },
-      }],
-    },
-    async ($, on) => {
-      const seed: Seed = { tracker: planning(T - 2_000) }
-      const seen = await start($, on, seed)
-      const pane = await mount($)
-      const before = await textOf(pane, 'plan:time:p1:total')
+  // Overview's own timer: an installed Overview loads after the trackers, so their redraws never pass its hooks.
+  test('plan_total_advances_on_screen_and_stops_when_waiting', async ($, on) => {
+    const seed: Seed = { tracker: planning(T - 2_000) }
+    const seen = await start($, on, seed)
+    const pane = await mount($)
+    const before = await textOf(pane, 'plan:time:p1:total')
 
-      await seen.clock.advance(1_000)
-      const ticked = await textOf(pane, 'plan:time:p1:total')
-      const base = planning(T)
-      seed.tracker = {
-        ...base,
-        plans: base.plans.map(p => ({ ...p, time: { ...p.time, dev: 115_000 } })), // the 3 s ran so far, flushed
-        clock: { group: 'p1', phase: 'waiting', since: T + 1_000, resume: 'dev', session: 's1' },
-      }
-      await seen.clock.advance(2_000) // the stand-in keeps ticking: the paused time must still not count
-      const waited = await textOf(pane, 'plan:time:p1:total')
+    await seen.clock.advance(1_000)
+    const ticked = await textOf(pane, 'plan:time:p1:total')
+    const base = planning(T)
+    seed.tracker = {
+      ...base,
+      plans: base.plans.map(p => ({ ...p, time: { ...p.time, dev: 115_000 } })), // the 3 s ran so far, flushed
+      clock: { group: 'p1', phase: 'waiting', since: T + 1_000, resume: 'dev', session: 's1' },
+    }
+    await pane.redraw() // plan-tracker's write of the paused clock redraws Overview (TC-321)
+    await seen.clock.advance(2_000)
+    const waited = await textOf(pane, 'plan:time:p1:total')
 
-      expect(before).toContain('27m 57s')
-      expect(ticked).toContain('27m 58s')
-      expect(waited).toContain('27m 58s')
-    },
-  )
+    expect(before).toContain('27m 57s')
+    expect(ticked).toContain('27m 58s')
+    expect(waited).toContain('27m 58s')
+  })
 
-  test(
-    'test_time_advances_on_screen',
-    {
-      plugins: [{
-        name: 'test-tracker',
-        register(on) {
-          on('session.start', ($, e, next) => {
-            $.clock.every(1_000, () => $.ui.invalidate('ui.render'))
-            return next(e)
-          })
-        },
-      }],
-    },
-    async ($, on) => {
-      const seed: Seed = { tests: shaped(TESTS) }
-      const seen = await start($, on, seed)
-      const pane = await mount($)
+  test('test_time_advances_on_screen', async ($, on) => {
+    const seed: Seed = { tests: shaped(TESTS) }
+    const seen = await start($, on, seed)
+    const pane = await mount($)
 
-      await seen.clock.advance(1_000)
-      const running = await textOf(pane, 'card:bar')
-      const [live, prior] = TESTS.runs
-      seed.tests = shaped({
-        ...TESTS,
-        runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
-        last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
-      })
-      await seen.clock.advance(60_000)
+    await seen.clock.advance(1_000)
+    const running = await textOf(pane, 'card:bar')
+    const [live, prior] = TESTS.runs
+    seed.tests = shaped({
+      ...TESTS,
+      runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
+      last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
+    })
+    await seen.clock.advance(60_000)
 
-      expect(running).toContain('· 9s')
-      expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
-    },
-  )
+    expect(running).toContain('· 9s')
+    expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
+  })
 
-  // Inline plugins stand in for the trackers: each redraws its own panes once, at 1, 2 and 3 s.
-  test(
-    'invalidate_relayed_only_from_plan_and_test_tracker',
-    {
-      plugins: [
-        {
-          name: 'git-tracker',
-          register(on) {
-            on('session.start', ($, e, next) => {
-              $.clock.after(1_000, () => $.ui.invalidate('ui.render'))
-              return next(e)
-            })
-          },
-        },
-        {
-          name: 'plan-tracker',
-          register(on) {
-            on('session.start', ($, e, next) => {
-              $.clock.after(2_000, () => $.ui.invalidate('ui.render'))
-              return next(e)
-            })
-          },
-        },
-        {
-          name: 'test-tracker',
-          register(on) {
-            on('session.start', ($, e, next) => {
-              $.clock.after(3_000, () => $.ui.invalidate('ui.render'))
-              return next(e)
-            })
-          },
-        },
-      ],
-    },
-    async ($, on) => {
-      const seen = await start($, on)
-      seen.invalidates = 0
+  test('timer_redraws_only_while_something_runs', async ($, on) => {
+    const seed: Seed = {}
+    const seen = await start($, on, seed)
+    await mount($)
+    seen.invalidates = 0
 
-      await seen.clock.advance(1_000)
-      const fromGit = seen.invalidates
-      await seen.clock.advance(1_000)
-      const fromPlan = seen.invalidates
-      await seen.clock.advance(1_000)
+    await seen.clock.advance(5_000)
+    const idle = seen.invalidates
+    seed.tracker = { ...planning(T), clock: { group: 'p1', phase: 'waiting', since: T, resume: 'dev', session: 's1' } }
+    await seen.clock.advance(5_000)
+    const waiting = seen.invalidates
+    seed.tracker = planning(T)
+    await seen.clock.advance(3_000)
 
-      expect(fromGit).toBe(1) // git-tracker's own, not relayed
-      expect(fromPlan).toBe(3) // + plan-tracker's own and overview's relay of it
-      expect(seen.invalidates).toBe(5) // + test-tracker's own and overview's relay of it
-    },
-  )
+    expect(idle).toBe(0)
+    expect(waiting).toBe(0)
+    expect(seen.invalidates).toBe(3)
+  })
 
   test('plan_row_sections_in_order_with_totals', async ($, on) => {
     const group = (id: string, file: string, n: number, ok: number) => ({ id, title: `plan ${id}`, file, approvedAt: '2026-11-23', items: items(n, ok) })
@@ -463,4 +404,31 @@ describe('overview', () => {
       expect(await textOf(pane, 'git:head')).toBe('feat/y')
     },
   )
+
+  test('rows_split_by_dividers_with_title_colors', async ($, on) => {
+    await start($, on, { tracker: planning(T), git: GIT, tests: shaped(TESTS) })
+
+    const pane = await mount($)
+
+    const order = await keys(pane)
+    const at = (key: string) => order.indexOf(key)
+    expect(at('plan:section:mode')).toBeGreaterThan(-1)
+    expect(at('divider:git')).toBeGreaterThan(at('plan:section:mode'))
+    expect(at('git:title')).toBeGreaterThan(at('divider:git'))
+    expect(at('divider:tests')).toBeGreaterThan(at('git:title'))
+    expect(at('tests:title')).toBeGreaterThan(at('divider:tests'))
+    expect(await textOf(pane, 'divider:git')).toBe('─'.repeat(48))
+    expect(await color(pane, /^PLAN MODE$/)).toBe('planMode')
+    expect(await color(pane, /^GIT$/)).toBe('claude')
+    expect(await color(pane, /^TESTS$/)).toBe('ide')
+  })
+
+  test('empty_plan_title_has_plan_color', async ($, on) => {
+    await start($, on)
+
+    const pane = await mount($)
+
+    expect(await color(pane, /^PLAN$/)).toBe('planMode')
+    expect(await textOf(pane, 'divider:tests')).toBe('─'.repeat(48))
+  })
 })

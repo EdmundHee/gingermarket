@@ -13,7 +13,7 @@
  *   helpers :528-572, stat :738-747, card :749-828; no run history
  * Nothing checks a copy against its source (a kit test cannot load another plugin's module): keep them in step by hand.
  */
-import type { PluginState, Register, ShapedValue } from 'claude-code'
+import type { EngineInterface, PluginState, Register, ShapedValue } from 'claude-code'
 import { atom, read } from 'claude-code'
 
 type Tracker = PluginState['plan-tracker']['tracker']
@@ -30,8 +30,26 @@ type Scope = NonNullable<Run['scope']>
 
 const PANE = 'overview'
 const DOCK_COLUMNS = 48 // the trackers' dock width
-/** Whose redraws Overview follows: their timers tick the plan clock and a running test; git-tracker's writes redraw. */
-const RELAY = new Set(['plan-tracker', 'test-tracker'])
+/** Each row's title color: theme keys with no pass/fail meaning, so a title never reads as a status. */
+const TITLE = { plan: 'planMode', git: 'claude', tests: 'ide' } as const
+
+let ticks = 0 // seconds the timer has run, for the once-a-minute `… ago` redraw
+
+/**
+ * Each second: a redraw while a plan phase runs (not paused), a test runs, or the newest `… ago` line still counts
+ * seconds (its first minute); after that once a minute while one shows. A tracker's own write already redraws the pane; this is for the clocks between writes. Overview keeps its
+ * own timer because a tracker's `$.ui.invalidate` passes only the hooks of plugins above it, and an installed Overview
+ * loads after the trackers (chain order = `enabledPlugins` order).
+ */
+async function tick($: EngineInterface) {
+  ticks += 1
+  const t = await read($, plan)
+  const v = await read($, tests)
+  const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
+  const ended = Object.values(v.last).map(l => l.endedAt)
+  const fresh = ended.length > 0 && (await $.clock.now()) - Math.max(...ended) <= 60_000
+  if (running || fresh || (ticks % 60 === 0 && ended.length > 0)) $.ui.invalidate('ui.render')
+}
 
 const plan = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, { nextId: 1, plans: [] } as Tracker)
 const git = atom({ plugin: 'git-tracker', key: 'view' } as const, { branch: '', ahead: 0, behind: 0, graph: [], files: [] } as GitView)
@@ -150,6 +168,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Open the Overview pane: plan, git and tests in one tab' })
     void $.ui.open({ id: PANE, title: 'Overview', columns: DOCK_COLUMNS })
+    // a reload stops the old timer and runs this again; /clear keeps it
+    $.clock.every(1_000, () => tick($))
     return next(e)
   })
 
@@ -157,14 +177,6 @@ export const register: Register = on => {
     const opened = await $.ui.open({ id: PANE, title: 'Overview', columns: DOCK_COLUMNS })
     return { text: opened.isPlaced ? 'Overview pane opened.' : `Overview pane waits: ${opened.reason}` }
   })
-
-  // A tracker's `$.ui.invalidate` redraws only its own panes; the live times here follow its timer. Our own call never
-  // comes back through this hook, so it cannot loop. A failure here passes the event on, never blocks it.
-  on('ui.invalidate', async ($, e, next) => {
-    const done = await next(e)
-    if (RELAY.has(next.origin.plugin)) $.ui.invalidate('ui.render')
-    return done
-  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Link } = $.ui.resolve(e)
@@ -245,7 +257,7 @@ export const register: Register = on => {
       <Box key="plan" flexDirection="column" gap={1}>
         {t.plans.length === 0 && (
           <Box key="plan:title">
-            <Text bold>PLAN</Text>
+            <Text bold color={TITLE.plan}>PLAN</Text>
           </Box>
         )}
         {isPlanning(t) && (
@@ -267,7 +279,7 @@ export const register: Register = on => {
             <Box flexDirection="column">
               <Box key={`plan:section:${source}`} flexDirection="row" gap={1}>
                 <Box flexGrow={1}>
-                  <Text bold>{label}</Text>
+                  <Text bold color={TITLE.plan}>{label}</Text>
                 </Box>
                 <Text dimColor>{`${verified(items)}/${items.length}`}</Text>
               </Box>
@@ -348,7 +360,7 @@ export const register: Register = on => {
     const gitRow = (
       <Box key="git" flexDirection="column">
         <Box key="git:title">
-          <Text bold>GIT</Text>
+          <Text bold color={TITLE.git}>GIT</Text>
         </Box>
         {gitBody}
       </Box>
@@ -359,7 +371,7 @@ export const register: Register = on => {
     const tcs = v.branch?.tcs ?? []
     const testsTitle = (
       <Box key="tests:title">
-        <Text bold>TESTS</Text>
+        <Text bold color={TITLE.tests}>TESTS</Text>
       </Box>
     )
 
@@ -472,10 +484,19 @@ export const register: Register = on => {
       )
     })()
 
+    /** A dim rule the pane's full width, between two rows. */
+    const divider = (id: string) => (
+      <Box key={`divider:${id}`}>
+        <Text dimColor>{'─'.repeat(e.props.bodyColumns)}</Text>
+      </Box>
+    )
+
     return (
-      <Box flexDirection="column" gap={1}>
+      <Box flexDirection="column">
         {planRow}
+        {divider('git')}
         {gitRow}
+        {divider('tests')}
         {testsRow}
       </Box>
     )
