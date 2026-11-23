@@ -88,9 +88,10 @@ function setup(on: On, seed: Seed) {
     seen.opened.push(e)
     return { value: { isPlaced: true as const } }
   })
-  on('ui.invalidate', () => {
+  // counts, then passes on: the kit's own bottom is what draws a mounted pane again
+  on('ui.invalidate', (_$, e, next) => {
     seen.invalidates += 1
-    return { value: undefined }
+    return next(e)
   })
   on('state.set', (_$, e, next) => {
     seen.sets.push(`${e.plugin}.${e.key}`)
@@ -299,53 +300,78 @@ describe('overview', () => {
     expect(await textOf(pane, 'card:last:branch')).toContain('!')
   })
 
-  test('plan_total_advances_and_stops_when_waiting', async ($, on) => {
-    const seed: Seed = { tracker: planning(T - 2_000) }
-    const seen = await start($, on, seed)
-    const pane = await mount($)
-    const before = await textOf(pane, 'plan:time:p1:total')
+  // The trackers' 1 s ticks, standing in: each redraws only its own panes; Overview follows them, no redraw call here.
+  // An inline plugin has no closure over this file (gotcha-test-kit-spawn-fake-inline-plugin-text-keys): literals only.
+  test(
+    'plan_total_advances_on_screen_and_stops_when_waiting',
+    {
+      plugins: [{
+        name: 'plan-tracker',
+        register(on) {
+          on('session.start', ($, e, next) => {
+            $.clock.every(1_000, () => $.ui.invalidate('ui.render'))
+            return next(e)
+          })
+        },
+      }],
+    },
+    async ($, on) => {
+      const seed: Seed = { tracker: planning(T - 2_000) }
+      const seen = await start($, on, seed)
+      const pane = await mount($)
+      const before = await textOf(pane, 'plan:time:p1:total')
 
-    await seen.clock.advance(1_000)
-    await pane.redraw()
-    const ticked = await textOf(pane, 'plan:time:p1:total')
-    const base = planning(T)
-    seed.tracker = {
-      ...base,
-      plans: base.plans.map(p => ({ ...p, time: { ...p.time, dev: 115_000 } })), // the 3 s ran so far, flushed
-      clock: { group: 'p1', phase: 'waiting', since: T + 1_000, resume: 'dev', session: 's1' },
-    }
-    await seen.clock.advance(2_000)
-    await pane.redraw()
-    const waited = await textOf(pane, 'plan:time:p1:total')
+      await seen.clock.advance(1_000)
+      const ticked = await textOf(pane, 'plan:time:p1:total')
+      const base = planning(T)
+      seed.tracker = {
+        ...base,
+        plans: base.plans.map(p => ({ ...p, time: { ...p.time, dev: 115_000 } })), // the 3 s ran so far, flushed
+        clock: { group: 'p1', phase: 'waiting', since: T + 1_000, resume: 'dev', session: 's1' },
+      }
+      await seen.clock.advance(2_000) // the stand-in keeps ticking: the paused time must still not count
+      const waited = await textOf(pane, 'plan:time:p1:total')
 
-    expect(before).toContain('27m 57s')
-    expect(ticked).toContain('27m 58s')
-    expect(waited).toContain('27m 58s')
-  })
+      expect(before).toContain('27m 57s')
+      expect(ticked).toContain('27m 58s')
+      expect(waited).toContain('27m 58s')
+    },
+  )
 
-  test('test_time_advances_on_redraw', async ($, on) => {
-    const seed: Seed = { tests: shaped(TESTS) }
-    const seen = await start($, on, seed)
-    const pane = await mount($)
+  test(
+    'test_time_advances_on_screen',
+    {
+      plugins: [{
+        name: 'test-tracker',
+        register(on) {
+          on('session.start', ($, e, next) => {
+            $.clock.every(1_000, () => $.ui.invalidate('ui.render'))
+            return next(e)
+          })
+        },
+      }],
+    },
+    async ($, on) => {
+      const seed: Seed = { tests: shaped(TESTS) }
+      const seen = await start($, on, seed)
+      const pane = await mount($)
 
-    await seen.clock.advance(1_000)
-    await pane.redraw()
-    const running = await textOf(pane, 'card:bar')
-    const [live, prior] = TESTS.runs
-    seed.tests = shaped({
-      ...TESTS,
-      runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
-      last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
-    })
-    await seen.clock.advance(60_000)
-    await pane.redraw()
+      await seen.clock.advance(1_000)
+      const running = await textOf(pane, 'card:bar')
+      const [live, prior] = TESTS.runs
+      seed.tests = shaped({
+        ...TESTS,
+        runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
+        last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
+      })
+      await seen.clock.advance(60_000)
 
-    expect(running).toContain('· 9s')
-    expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
-  })
+      expect(running).toContain('· 9s')
+      expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
+    },
+  )
 
   // Inline plugins stand in for the trackers: each redraws its own panes once, at 1, 2 and 3 s.
-  // An inline plugin has no closure over this file (gotcha-test-kit-spawn-fake-inline-plugin-text-keys): literals only.
   test(
     'invalidate_relayed_only_from_plan_and_test_tracker',
     {
