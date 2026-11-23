@@ -1,0 +1,8 @@
+{
+  "name": "overview",
+  "version": "0.1.1",
+  "description": "Overview pane beside plan-tracker: one tab with three rows, the plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, and the test card from test-tracker; reads their state, runs nothing.",
+  "author": { "name": "Edmund Hee" },
+  "license": "MIT",
+  "dependencies": ["plan-tracker", "git-tracker", "test-tracker"]
+}
