@@ -40,13 +40,18 @@ const TITLE = { plan: 'planMode', git: 'claude', tests: 'ide' } as const
  * own timer because a tracker's `$.ui.invalidate` passes only the hooks of plugins above it, and an installed Overview
  * loads after the trackers (chain order = `enabledPlugins` order).
  */
+let before: number | undefined // the previous tick's time: a label's minute is compared with it, not a window a late tick could skip
+
 // ponytail: two state reads a second all session, idle too; start and stop it on tracker writes if that ever shows
 async function tick($: EngineInterface) {
   const t = await read($, plan)
   const v = await read($, tests)
   const now = await $.clock.now()
+  const was = before
+  before = now
+  const minute = (at: number, ended: number) => Math.floor((at - ended) / 60_000)
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
-  const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || (now - l.endedAt) % 60_000 < 1_000)
+  const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || was === undefined || minute(now, l.endedAt) !== minute(was, l.endedAt))
   if (running || relabel) $.ui.invalidate('ui.render')
 }
 
@@ -255,7 +260,7 @@ export const register: Register = on => {
     const planRow = (
       <Box key="plan" flexDirection="column" gap={1}>
         {t.plans.length === 0 && (
-          <Box key="plan:title" marginBottom={1}>
+          <Box key="plan:title">
             <Text bold color={TITLE.plan}>PLAN</Text>
           </Box>
         )}

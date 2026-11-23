@@ -60,7 +60,8 @@ row whose tracker has no data yet shows a one-line empty state (`No plan tracked
 ## What it runs and writes
 
 Nothing. It reads the three trackers' session state (any plugin may read another's; only the owner writes it) and
-redraws when they write, plus a 1 s timer of its own while a clock runs. No git, gh, test command or model call.
+redraws when they write. Its own timer checks each second and redraws while a plan phase or a test runs, or when a
+`… ago` label changes. No git, gh, test command or model call.
 
 ## Install
 

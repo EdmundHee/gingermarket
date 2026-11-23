@@ -335,18 +335,18 @@ describe('overview', () => {
     const [live, prior] = TESTS.runs
     seed.tests = shaped({
       ...TESTS,
-      runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
-      last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
+      runs: [{ ...live!, exit: 0, endedAt: T + 1_500 }, prior!],
+      last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_500 } },
     })
     await seen.clock.advance(30_000)
     const half = await textOf(pane, 'card:last:branch')
     await seen.clock.advance(30_000)
     const minute = await textOf(pane, 'card:last:branch')
-    await seen.clock.advance(60_000) // ended 1 s after the timer started: its minutes fall off the timer's own
+    await seen.clock.advance(61_000) // ended 1.5 s after the timer started, between its ticks
 
     expect(running).toContain('· 9s')
-    expect(half).toContain('30s ago')
-    expect(minute).toContain('1m ago')
+    expect(half).toContain('29s ago')
+    expect(minute).toContain('59s ago') // 59.5 s: still seconds
     expect(await textOf(pane, 'card:last:branch')).toContain('2m ago')
   })
 
@@ -369,11 +369,20 @@ describe('overview', () => {
     seed.tracker = { ...planning(T), clock: { group: 'p1', phase: 'waiting', since: T, resume: 'dev', session: 's1' } }
     await seen.clock.advance(3_000)
 
+    const paused = seen.invalidates
+    // an idle Last line 2m 30.5s old: nothing until its age reaches 3m
+    seed.tests = shaped({ ...TESTS, runs: [], branch: undefined, last: { full: { id: 0, command: 'run line', counts: counts(1, 0), exit: 0, endedAt: T + 15_000 - 150_500 } } })
+    await seen.clock.advance(5_000)
+    const quiet = seen.invalidates
+    await seen.clock.advance(25_000)
+
     expect(idle).toBe(0)
     expect(waiting).toBe(0)
     expect(first - waiting).toBe(1)
     expect(second - first).toBe(1)
-    expect(seen.invalidates).toBe(second) // paused again: no more
+    expect(paused).toBe(second) // paused again: no more
+    expect(quiet).toBe(paused) // a tracker's write draws a new line; the timer waits for its next minute
+    expect(seen.invalidates).toBe(quiet + 1) // once, at 3m
   })
 
   test('plan_row_sections_in_order_with_totals', async ($, on) => {
@@ -439,6 +448,7 @@ describe('overview', () => {
     expect(narrow).toBe('─'.repeat(30))
     expect((await pane.find({ type: 'Text', text: /^─+$/ }))?.props.dimColor).toBe(true)
     expect((await pane.find({ key: 'divider:git' }))?.props.marginY).toBe(1)
+    expect((await pane.findAll({ type: 'Box' }))[0]?.props.gap).toBeUndefined() // the rules' margins are the only space between rows
     expect((await pane.find({ key: 'plan:section:mode' }))?.props.marginBottom).toBe(1)
     expect((await pane.find({ key: 'git:title' }))?.props.marginBottom).toBe(1)
     expect((await pane.find({ key: 'tests:title' }))?.props.marginBottom).toBe(1)
@@ -453,7 +463,8 @@ describe('overview', () => {
     const pane = await mount($)
 
     expect(await color(pane, /^PLAN$/)).toBe('planMode')
-    expect((await pane.find({ key: 'plan:title' }))?.props.marginBottom).toBe(1)
+    expect((await pane.find({ key: 'plan:title' }))?.props.marginBottom).toBeUndefined() // the plan row's gap is its blank line
+    expect((await pane.find({ key: 'plan' }))?.props.gap).toBe(1)
     expect(await textOf(pane, 'divider:git')).toBe('─'.repeat(48))
     expect(await textOf(pane, 'divider:tests')).toBe('─'.repeat(48))
   })
