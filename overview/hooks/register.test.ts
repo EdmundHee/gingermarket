@@ -317,6 +317,7 @@ describe('overview', () => {
     }
     await pane.redraw() // plan-tracker's write of the paused clock redraws Overview (TC-321)
     await seen.clock.advance(2_000)
+    await pane.redraw() // drawn 2 s into the pause: the paused time must not count
     const waited = await textOf(pane, 'plan:time:p1:total')
 
     expect(before).toContain('27m 57s')
@@ -337,10 +338,16 @@ describe('overview', () => {
       runs: [{ ...live!, exit: 0, endedAt: T + 1_000 }, prior!],
       last: { ...TESTS.last, branch: { id: 2, command: COMMAND, counts: counts(12, 0), exit: 0, endedAt: T + 1_000 } },
     })
-    await seen.clock.advance(60_000)
+    await seen.clock.advance(30_000)
+    const half = await textOf(pane, 'card:last:branch')
+    await seen.clock.advance(30_000)
+    const minute = await textOf(pane, 'card:last:branch')
+    await seen.clock.advance(60_000) // ended 1 s after the timer started: its minutes fall off the timer's own
 
     expect(running).toContain('· 9s')
-    expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
+    expect(half).toContain('30s ago')
+    expect(minute).toContain('1m ago')
+    expect(await textOf(pane, 'card:last:branch')).toContain('2m ago')
   })
 
   test('timer_redraws_only_while_something_runs', async ($, on) => {
@@ -355,11 +362,18 @@ describe('overview', () => {
     await seen.clock.advance(5_000)
     const waiting = seen.invalidates
     seed.tracker = planning(T)
+    await seen.clock.advance(1_000)
+    const first = seen.invalidates
+    await seen.clock.advance(1_000)
+    const second = seen.invalidates
+    seed.tracker = { ...planning(T), clock: { group: 'p1', phase: 'waiting', since: T, resume: 'dev', session: 's1' } }
     await seen.clock.advance(3_000)
 
     expect(idle).toBe(0)
     expect(waiting).toBe(0)
-    expect(seen.invalidates).toBe(3)
+    expect(first - waiting).toBe(1)
+    expect(second - first).toBe(1)
+    expect(seen.invalidates).toBe(second) // paused again: no more
   })
 
   test('plan_row_sections_in_order_with_totals', async ($, on) => {
@@ -405,19 +419,29 @@ describe('overview', () => {
     },
   )
 
-  test('rows_split_by_dividers_with_title_colors', async ($, on) => {
+  test('rows_split_by_dividers_with_title_colors_and_spacing', async ($, on) => {
     await start($, on, { tracker: planning(T), git: GIT, tests: shaped(TESTS) })
 
     const pane = await mount($)
+    const wide = await textOf(pane, 'divider:git')
+    await pane.redraw({ ...PANE, bodyColumns: 30 })
+    const narrow = await textOf(pane, 'divider:tests')
 
     const order = await keys(pane)
     const at = (key: string) => order.indexOf(key)
-    expect(at('plan:section:mode')).toBeGreaterThan(-1)
-    expect(at('divider:git')).toBeGreaterThan(at('plan:section:mode'))
+    expect(at('plan:note:p1')).toBeGreaterThan(-1)
+    expect(at('divider:git')).toBeGreaterThan(at('plan:note:p1'))
     expect(at('git:title')).toBeGreaterThan(at('divider:git'))
-    expect(at('divider:tests')).toBeGreaterThan(at('git:title'))
-    expect(at('tests:title')).toBeGreaterThan(at('divider:tests'))
-    expect(await textOf(pane, 'divider:git')).toBe('─'.repeat(48))
+    expect(at('git:new')).toBeGreaterThan(at('git:title'))
+    expect(at('divider:tests')).toBeGreaterThan(at('git:new'))
+    expect(at('card:head')).toBeGreaterThan(at('divider:tests'))
+    expect(wide).toBe('─'.repeat(48))
+    expect(narrow).toBe('─'.repeat(30))
+    expect((await pane.find({ type: 'Text', text: /^─+$/ }))?.props.dimColor).toBe(true)
+    expect((await pane.find({ key: 'divider:git' }))?.props.marginY).toBe(1)
+    expect((await pane.find({ key: 'plan:section:mode' }))?.props.marginBottom).toBe(1)
+    expect((await pane.find({ key: 'git:title' }))?.props.marginBottom).toBe(1)
+    expect((await pane.find({ key: 'tests:title' }))?.props.marginBottom).toBe(1)
     expect(await color(pane, /^PLAN MODE$/)).toBe('planMode')
     expect(await color(pane, /^GIT$/)).toBe('claude')
     expect(await color(pane, /^TESTS$/)).toBe('ide')
@@ -429,6 +453,8 @@ describe('overview', () => {
     const pane = await mount($)
 
     expect(await color(pane, /^PLAN$/)).toBe('planMode')
+    expect((await pane.find({ key: 'plan:title' }))?.props.marginBottom).toBe(1)
+    expect(await textOf(pane, 'divider:git')).toBe('─'.repeat(48))
     expect(await textOf(pane, 'divider:tests')).toBe('─'.repeat(48))
   })
 })

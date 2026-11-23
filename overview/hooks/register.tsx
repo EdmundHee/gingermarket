@@ -33,22 +33,21 @@ const DOCK_COLUMNS = 48 // the trackers' dock width
 /** Each row's title color: theme keys with no pass/fail meaning, so a title never reads as a status. */
 const TITLE = { plan: 'planMode', git: 'claude', tests: 'ide' } as const
 
-let ticks = 0 // seconds the timer has run, for the once-a-minute `… ago` redraw
-
 /**
- * Each second: a redraw while a plan phase runs (not paused), a test runs, or the newest `… ago` line still counts
- * seconds (its first minute); after that once a minute while one shows. A tracker's own write already redraws the pane; this is for the clocks between writes. Overview keeps its
+ * Each second: a redraw while a plan phase runs (not paused) or a test runs, or when a `… ago` label changes (each
+ * second in its first minute, then at each whole minute of its age). A tracker's own write already redraws the pane;
+ * this is for the clocks between writes. Overview keeps its
  * own timer because a tracker's `$.ui.invalidate` passes only the hooks of plugins above it, and an installed Overview
  * loads after the trackers (chain order = `enabledPlugins` order).
  */
+// ponytail: two state reads a second all session, idle too; start and stop it on tracker writes if that ever shows
 async function tick($: EngineInterface) {
-  ticks += 1
   const t = await read($, plan)
   const v = await read($, tests)
+  const now = await $.clock.now()
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
-  const ended = Object.values(v.last).map(l => l.endedAt)
-  const fresh = ended.length > 0 && (await $.clock.now()) - Math.max(...ended) <= 60_000
-  if (running || fresh || (ticks % 60 === 0 && ended.length > 0)) $.ui.invalidate('ui.render')
+  const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || (now - l.endedAt) % 60_000 < 1_000)
+  if (running || relabel) $.ui.invalidate('ui.render')
 }
 
 const plan = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, { nextId: 1, plans: [] } as Tracker)
@@ -256,7 +255,7 @@ export const register: Register = on => {
     const planRow = (
       <Box key="plan" flexDirection="column" gap={1}>
         {t.plans.length === 0 && (
-          <Box key="plan:title">
+          <Box key="plan:title" marginBottom={1}>
             <Text bold color={TITLE.plan}>PLAN</Text>
           </Box>
         )}
@@ -277,7 +276,7 @@ export const register: Register = on => {
           const items = plans.flatMap(p => p.items)
           return (
             <Box flexDirection="column">
-              <Box key={`plan:section:${source}`} flexDirection="row" gap={1}>
+              <Box key={`plan:section:${source}`} flexDirection="row" gap={1} marginBottom={1}>
                 <Box flexGrow={1}>
                   <Text bold color={TITLE.plan}>{label}</Text>
                 </Box>
@@ -359,7 +358,7 @@ export const register: Register = on => {
 
     const gitRow = (
       <Box key="git" flexDirection="column">
-        <Box key="git:title">
+        <Box key="git:title" marginBottom={1}>
           <Text bold color={TITLE.git}>GIT</Text>
         </Box>
         {gitBody}
@@ -370,7 +369,7 @@ export const register: Register = on => {
 
     const tcs = v.branch?.tcs ?? []
     const testsTitle = (
-      <Box key="tests:title">
+      <Box key="tests:title" marginBottom={1}>
         <Text bold color={TITLE.tests}>TESTS</Text>
       </Box>
     )
@@ -484,9 +483,9 @@ export const register: Register = on => {
       )
     })()
 
-    /** A dim rule the pane's full width, between two rows. */
+    /** A dim rule the pane's full width, between two rows, a blank line each side. */
     const divider = (id: string) => (
-      <Box key={`divider:${id}`}>
+      <Box key={`divider:${id}`} marginY={1}>
         <Text dimColor>{'─'.repeat(e.props.bodyColumns)}</Text>
       </Box>
     )
