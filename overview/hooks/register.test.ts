@@ -28,8 +28,9 @@ const items = (n: number, verified: number): PlanItem[] =>
 const planning = (since: number, extra: Partial<Tracker> = {}): Tracker => ({
   nextId: 45,
   plans: [{
-    id: 'p1', title: 'plan-tracker 0.4.9: fewer rounds to get items verified', file: PLAN_FILE, approvedAt: '2026-11-22',
-    items: items(44, 42), note: NOTE,
+    // a control character in a Text gets the whole pane refused: a typed title can hold one, a sonnet note too
+    id: 'p1', title: 'plan-tracker 0.4.9: fewer rounds\u0007 to get items verified', file: PLAN_FILE, approvedAt: '2026-11-22',
+    items: items(44, 42), note: `${NOTE}\u001b`,
     time: { plan: 580_000, review: 44_000, dev: 112_000, test: 406_000, verify: 533_000 },
   }],
   clock: { group: 'p1', phase: 'dev', since, session: 's1' },
@@ -57,7 +58,8 @@ const tcs = ['TC-401', 'TC-402', 'TC-403', 'TC-404', 'TC-405', 'TC-406'].map(id 
 const TESTS: TestView = {
   nextId: 3,
   runs: [
-    { id: 2, source: 'tool', command: COMMAND, scope: 'branch', startedAt: T - 8_000, tests: rows(11, 1), counts: counts(11, 1), now: 'overview pane renders' },
+    // its failing row is TC-404's: newer than TC-404's stored pass, so it wins
+    { id: 2, source: 'tool', command: COMMAND, scope: 'branch', startedAt: T - 8_000, tests: [...rows(11, 0), { name: 'bad_404', status: 'fail', tc: 'TC-404' }], counts: counts(11, 1), now: 'overview pane renders' },
     { id: 1, source: 'tool', command: COMMAND, scope: 'branch', startedAt: T - 3_700_000, endedAt: T - 3_600_000, exit: 0, tests: rows(14, 0), counts: counts(14, 0) },
   ],
   branch: { name: 'feat/x', tcs },
@@ -138,11 +140,12 @@ describe('overview', () => {
       command: 'overview', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 200 },
     })
 
-    expect(seen.opened.map(o => o.id)).toEqual(['overview'])
+    expect(seen.opened).toHaveLength(1)
+    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48 })
     expect(ran).toMatchObject({ text: 'Overview pane opened.' })
   })
 
-  test('empty_trackers_show_their_own_empty_text', async ($, on) => {
+  test('empty_trackers_show_empty_lines', async ($, on) => {
     await start($, on)
 
     const pane = await mount($)
@@ -165,15 +168,15 @@ describe('overview', () => {
 
     expect(await textOf(pane, 'plan:section:mode')).toContain('PLAN MODE')
     expect(await textOf(pane, 'plan:section:mode')).toContain('42/44')
-    expect(await textOf(pane, 'plan:head:p1')).toContain('plan-tracker 0.4.9: fewer rounds')
+    expect(await textOf(pane, 'plan:head:p1')).toContain('plan-tracker 0.4.9: fewer rounds to get items verified')
     expect(await textOf(pane, 'plan:head:p1')).toContain('▰▰▰▰▰▰▰▰▰▰ 42/44')
     const phases = (await keys(pane)).filter(k => k.startsWith('plan:time:p1:'))
     expect(phases).toEqual(['plan:time:p1:plan', 'plan:time:p1:review', 'plan:time:p1:dev', 'plan:time:p1:test', 'plan:time:p1:verify', 'plan:time:p1:total'])
-    expect(await textOf(pane, 'plan:time:p1:plan')).toContain('9m 40s')
-    expect(await textOf(pane, 'plan:time:p1:review')).toContain('Codex review')
-    expect(await textOf(pane, 'plan:time:p1:dev')).toContain('●')
-    expect(await textOf(pane, 'plan:time:p1:dev')).toContain('2m 22s') // 1m 52s + the live 30 s
-    expect(await textOf(pane, 'plan:time:p1:verify')).toContain('Codex verify')
+    expect(await textOf(pane, 'plan:time:p1:plan')).toBe('Plan9m 40s')
+    expect(await textOf(pane, 'plan:time:p1:review')).toBe('Codex review44s')
+    expect(await textOf(pane, 'plan:time:p1:dev')).toBe('Dev●2m 22s') // 1m 52s + the live 30 s
+    expect(await textOf(pane, 'plan:time:p1:test')).toBe('Test6m 46s')
+    expect(await textOf(pane, 'plan:time:p1:verify')).toBe('Codex verify8m 53s')
     expect(await textOf(pane, 'plan:time:p1:total')).toContain('28m 25s')
     expect(await textOf(pane, 'plan:note:p1')).toBe(NOTE)
     expect(await pane.find({ type: 'Text', text: /item 1\b/ })).toBeUndefined()
@@ -186,7 +189,7 @@ describe('overview', () => {
       nextId: 9,
       plans: [{ id: 'p2', title: 'Shipped thing', file: PLAN_FILE, approvedAt: '2026-11-20', items: items(8, 8), time: { dev: 1_677_000 } }],
       pending: { plan: 60_000 },
-      clock: { phase: 'plan', since: T, session: 's1' },
+      clock: { phase: 'plan', since: T - 5_000, session: 's1' },
     }
     await start($, on, { tracker })
 
@@ -195,7 +198,7 @@ describe('overview', () => {
     expect(await textOf(pane, 'plan:head:p2')).toContain('✓ Shipped thing')
     expect(await textOf(pane, 'plan:head:p2')).toContain('8/8 27m 57s')
     expect(await textOf(pane, 'plan:pending')).toContain('Planning (not approved yet)')
-    expect(await textOf(pane, 'plan:time:pending:plan')).toContain('1m 00s')
+    expect(await textOf(pane, 'plan:time:pending:plan')).toBe('Plan●1m 05s') // 60 s stored + the live 5 s
   })
 
   test('git_row_branch_pr_and_totals', async ($, on) => {
@@ -212,7 +215,7 @@ describe('overview', () => {
     expect(await textOf(pane, 'git:new')).toContain('NEW 3')
     expect(await textOf(pane, 'git:new')).toContain('+412')
     expect(await color(pane, /^open$/)).toBe('success')
-    expect(await pane.find({ type: 'Text', text: /src\/a\.ts/ })).toBeUndefined()
+    expect(await pane.find({ type: 'Text', text: /src\// })).toBeUndefined()
     expect(await pane.find({ type: 'Text', text: /3e1c2aa/ })).toBeUndefined()
   })
 
@@ -222,12 +225,18 @@ describe('overview', () => {
     const pane = await mount($)
     const error = await textOf(pane, 'git:empty')
 
-    seed.git = { ...GIT, files: [], pr: { number: 21, url: 'https://github.com/o/r/pull/21', state: 'OPEN', isDraft: true } }
+    seed.git = { ...GIT, files: [] }
+    await pane.redraw()
+    const none = await textOf(pane, 'git:none')
+    const openPr = await textOf(pane, 'git:pr')
+    seed.git = { ...GIT, pr: { number: 21, url: 'https://github.com/o/r/pull/21', state: 'OPEN', isDraft: true } }
     await pane.redraw()
 
     expect(error).toBe('not a git repository')
-    expect(await textOf(pane, 'git:none')).toBe('No changes since main.')
+    expect(none).toBe('No changes since main.')
+    expect(openPr).toContain('PR #21 open')
     expect(await textOf(pane, 'git:pr')).toContain('PR #21 draft')
+    expect(await textOf(pane, 'git:changed')).toContain('CHANGED 2')
   })
 
   test('tests_row_is_test_tracker_card', async ($, on) => {
@@ -241,11 +250,13 @@ describe('overview', () => {
     expect(await textOf(pane, 'card:stat')).toContain('✓ 11')
     expect(await textOf(pane, 'card:stat')).toContain('✗ 1')
     expect(await textOf(pane, 'card:stat')).toContain('now: overview pane renders')
-    expect(await textOf(pane, 'card:tcs')).toBe('Branch TCs 6   ✓ 4  ✗ 1  · 1 not run')
+    expect(await textOf(pane, 'card:tcs')).toBe('Branch TCs 6   ✓ 3  ✗ 2  · 1 not run')
+    expect(await textOf(pane, 'card:tc:TC-404')).toBe('✗ TC-404 f TC-404')
     expect(await textOf(pane, 'card:tc:TC-405')).toBe('✗ TC-405 f TC-405')
+    expect(await pane.find({ key: 'card:tc:TC-401' })).toBeUndefined()
     expect(await textOf(pane, 'card:tc:TC-406')).toBe('· TC-406 f TC-406')
     expect(await textOf(pane, 'card:last:full')).toContain('Last full')
-    expect(await textOf(pane, 'card:last:full')).toContain('118/118')
+    expect(await textOf(pane, 'card:last:full')).toContain('✓ 118/118')
     expect(await textOf(pane, 'card:last:full')).toContain('1h ago')
     expect(await textOf(pane, 'card:last:branch')).toContain('52/53')
     expect(await textOf(pane, 'card:last:branch')).toContain('2m ago')
@@ -263,6 +274,7 @@ describe('overview', () => {
   test('tests_row_failed_stopped_and_errored_runs', async ($, on) => {
     const ended = (over: Partial<Run>): TestView => ({
       ...TESTS,
+      last: { ...TESTS.last, branch: { id: 3, command: COMMAND, counts: counts(10, 2), exit: over.exit, endedAt: T - 1_000 } },
       runs: [{ id: 3, source: 'tool', command: COMMAND, scope: 'branch', startedAt: T - 9_000, endedAt: T - 1_000, tests: rows(10, 2), counts: counts(10, 2), ...over }],
     })
     const seed: Seed = { tests: shaped(ended({ exit: 1 })) }
@@ -274,6 +286,7 @@ describe('overview', () => {
     seed.tests = shaped(ended({ exit: 'stopped' }))
     await pane.redraw()
     const stopped = await textOf(pane, 'card:stat')
+    const lastStopped = await textOf(pane, 'card:last:branch')
     seed.tests = shaped(ended({ exit: 'error', error: 'spawn failed' }))
     await pane.redraw()
     const errored = await textOf(pane, 'card:stat')
@@ -281,7 +294,9 @@ describe('overview', () => {
     expect(failColor).toBe('error')
     expect(lastBranch).toContain('✗')
     expect(stopped).toContain('■ stopped')
+    expect(lastStopped).toContain('■')
     expect(errored).toContain('! error: spawn failed')
+    expect(await textOf(pane, 'card:last:branch')).toContain('!')
   })
 
   test('plan_total_advances_and_stops_when_waiting', async ($, on) => {
@@ -329,7 +344,7 @@ describe('overview', () => {
     expect(await textOf(pane, 'card:last:branch')).toContain('1m ago')
   })
 
-  // Inline plugins stand in for the trackers: each redraws its own panes once, git-tracker at 1 s, plan-tracker at 2 s.
+  // Inline plugins stand in for the trackers: each redraws its own panes once, at 1, 2 and 3 s.
   // An inline plugin has no closure over this file (gotcha-test-kit-spawn-fake-inline-plugin-text-keys): literals only.
   test(
     'invalidate_relayed_only_from_plan_and_test_tracker',
@@ -353,6 +368,15 @@ describe('overview', () => {
             })
           },
         },
+        {
+          name: 'test-tracker',
+          register(on) {
+            on('session.start', ($, e, next) => {
+              $.clock.after(3_000, () => $.ui.invalidate('ui.render'))
+              return next(e)
+            })
+          },
+        },
       ],
     },
     async ($, on) => {
@@ -362,9 +386,55 @@ describe('overview', () => {
       await seen.clock.advance(1_000)
       const fromGit = seen.invalidates
       await seen.clock.advance(1_000)
+      const fromPlan = seen.invalidates
+      await seen.clock.advance(1_000)
 
       expect(fromGit).toBe(1) // git-tracker's own, not relayed
-      expect(seen.invalidates).toBe(3) // + plan-tracker's own and overview's relay of it
+      expect(fromPlan).toBe(3) // + plan-tracker's own and overview's relay of it
+      expect(seen.invalidates).toBe(5) // + test-tracker's own and overview's relay of it
+    },
+  )
+
+  test('plan_row_sections_in_order_with_totals', async ($, on) => {
+    const group = (id: string, file: string, n: number, ok: number) => ({ id, title: `plan ${id}`, file, approvedAt: '2026-11-23', items: items(n, ok) })
+    const tracker: Tracker = {
+      nextId: 60,
+      plans: [group('t1', '', 1, 0), group('m1', PLAN_FILE, 44, 42), group('d1', '/repo/docs/superpowers/plans/x.md', 2, 1), group('m2', PLAN_FILE, 2, 1)],
+    }
+    await start($, on, { tracker })
+
+    const pane = await mount($)
+
+    const sections = (await keys(pane)).filter(k => k.startsWith('plan:section:'))
+    expect(sections).toEqual(['plan:section:docs', 'plan:section:mode', 'plan:section:tasks'])
+    expect(await textOf(pane, 'plan:section:docs')).toBe('PLAN DOCS1/2')
+    expect(await textOf(pane, 'plan:section:mode')).toBe('PLAN MODE43/46')
+    expect(await textOf(pane, 'plan:section:tasks')).toBe('TASKS0/1')
+    expect(await textOf(pane, 'plan:head:m2')).toContain('▰▰▰▰▰▱▱▱▱▱ 1/2')
+  })
+
+  test(
+    'tracker_write_redraws_overview',
+    {
+      plugins: [{
+        name: 'git-tracker',
+        register(on) {
+          on('session.start', ($, e, next) => {
+            $.clock.after(1_000, () => $.state.set({ plugin: 'git-tracker', key: 'view' }, { branch: 'feat/y', ahead: 0, behind: 0, graph: [], files: [] }))
+            return next(e)
+          })
+        },
+      }],
+    },
+    async ($, on) => {
+      const seen = await start($, on)
+      const pane = await mount($)
+      const before = await textOf(pane, 'git:empty')
+
+      await seen.clock.advance(1_000)
+
+      expect(before).toBe('Reading git…')
+      expect(await textOf(pane, 'git:head')).toBe('feat/y')
     },
   )
 })

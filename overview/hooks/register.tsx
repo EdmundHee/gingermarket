@@ -11,7 +11,7 @@
  *   only), head :248-265 (no ↻), no changes :269, PR :272-280; no graph
  * - tests row: test-tracker/hooks/register.tsx printable :30, tcResults :327, fmt/took/mark/doing :486-516, card
  *   helpers :528-572, stat :738-747, card :749-828; no run history
- * The tests assert the strings the trackers' own tests assert, so drift shows up red.
+ * Nothing checks a copy against its source (a kit test cannot load another plugin's module): keep them in step by hand.
  */
 import type { PluginState, Register, ShapedValue } from 'claude-code'
 import { atom, read } from 'claude-code'
@@ -216,7 +216,7 @@ export const register: Register = on => {
         return (
           <Box key={`plan:head:${p.id}`} flexDirection="row" gap={1} marginLeft={2} marginTop={n > 0 ? 1 : 0}>
             <Box flexGrow={1}>
-              <Text dimColor wrap="truncate">{`✓ ${p.title}`}</Text>
+              <Text dimColor wrap="truncate">{`✓ ${printable(p.title)}`}</Text>
             </Box>
             <Text dimColor>{`${ok}/${p.items.length}${spent > 0 ? ` ${fmt(spent)}` : ''}`}</Text>
           </Box>
@@ -227,14 +227,14 @@ export const register: Register = on => {
         <Box flexDirection="column" marginLeft={2} marginTop={n > 0 ? 1 : 0}>
           <Box key={`plan:head:${p.id}`} flexDirection="row" gap={1}>
             <Box flexGrow={1}>
-              <Text bold wrap="truncate">{p.title}</Text>
+              <Text bold wrap="truncate">{printable(p.title)}</Text>
             </Box>
             <Text dimColor>{`${bar(filled)} ${ok}/${p.items.length}`}</Text>
           </Box>
           {phaseRows(p.id, p.time)}
           {p.note !== undefined && (
             <Box key={`plan:note:${p.id}`}>
-              <Text dimColor wrap="truncate">{p.note}</Text>
+              <Text dimColor wrap="truncate">{printable(p.note)}</Text>
             </Box>
           )}
         </Box>

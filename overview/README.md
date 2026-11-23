@@ -48,7 +48,8 @@ runs.
 ## Needs
 
 plan-tracker, git-tracker and test-tracker, installed and enabled: `plugin.json` lists them under `dependencies`. A
-row whose tracker has no data yet shows that tracker's own empty text.
+row whose tracker has no data yet shows a one-line empty state (`No plan tracked yet.`, `Reading git…`,
+`No test runs yet.`).
 
 ## What it runs and writes
 
