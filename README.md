@@ -25,6 +25,7 @@ On Claude Code 2.1.275 or later, one step does both: `/plugin install <name> --m
 | [**git-tracker**](git-tracker/README.md) | Git pane beside plan-tracker: the branch this one was cut from as git's own graph, changed and new files with +/- line counts, and the PR link once one exists. | git; `gh` for the PR row | `/plugin install git-tracker@gingermarket` |
 | [**feature-tracker**](feature-tracker/README.md) | Features pane beside plan-tracker: the repo's modules and their features from a hand-editable features.md, an opus review per module (missing features, tech debt, missing handling, test gaps, security, improvements) logged as checkbox notes in Obsidian or docs/features/, with each finding listed in the pane to pick and plan. | Optional `notesDir` setting (an Obsidian folder) | `/plugin install feature-tracker@gingermarket` |
 | [**test-tracker**](test-tracker/README.md) | Tests pane beside plan-tracker: every test run as it happens, each test ticked pass or fail live with its TC id, the test running now, elapsed time and the last five runs; Claude runs tests through its run_tests tool, plain Bash test commands show their results at the end. | Nothing | `/plugin install test-tracker@gingermarket` |
+| [**overview**](overview/README.md) | Overview pane beside plan-tracker: one tab with three rows, the plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, and the test card from test-tracker; reads their state, runs nothing. | plan-tracker, git-tracker and test-tracker | `/plugin install overview@gingermarket` |
 
 ## What each plugin runs and writes
 
@@ -33,6 +34,7 @@ On Claude Code 2.1.275 or later, one step does both: `/plugin install <name> --m
 - **git-tracker**: loads `hooks/register.tsx`. Runs read-only `git` and `gh` commands after each edit or Bash call. Writes nothing.
 - **feature-tracker**: loads `hooks/register.tsx`. Runs `git`, spawns a read-only opus reader, writes `features.md` and review notes to `docs/features/` or `notesDir`. Plan N selected and ▶ submit a prompt.
 - **test-tracker**: loads `hooks/register.tsx`. Its `run_tests` tool runs the test command it is given with `/bin/sh -c`, once the person allows the call (its own permission, not Bash's: allowing the tool allows every command; a command the Bash rules deny is refused), reads `tests/TEST_CASES.md`, and for the card runs read-only `git` (`rev-parse`, `merge-base`, `rev-list`, `ls-files`, `diff`) at session start and each run's start and end. Hooks every Bash call to watch test commands. Writes nothing to disk.
+- **overview**: loads `hooks/register.tsx`. Reads plan-tracker's, git-tracker's and test-tracker's session state and redraws when they write, plus a 1 s timer of its own for running clocks and `… ago` labels. Runs nothing and writes nothing.
 
 ## Adding Plugins
 
