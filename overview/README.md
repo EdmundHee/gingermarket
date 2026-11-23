@@ -45,11 +45,13 @@ Last branch   ✗ 52/53   2m ago
 The pane opens at session start; `/overview` opens it again. Rows are split by a dim rule, each row's title in its own
 color (Plan teal, Git orange, Tests blue). Times tick each second while a plan phase or a test run runs.
 
-### Making it the first tab
+### Tab order
 
-Tabs follow the order panes open, and plugins start in the order of `enabledPlugins` in `~/.claude/settings.json`
-(install order). Installed after the trackers, Overview opens last. To make it the first tab, move
-`"overview@gingermarket": true` above `plan-tracker@gingermarket` in `enabledPlugins` and restart.
+Tabs follow the order panes open. Overview opens its pane as soon as its session starts, so it is the first tab when
+Claude Code starts it before the trackers, as it did installed after them (probe of the plugin chain:
+feature-tracker, ravenquill, overview, plan-tracker, git-tracker, test-tracker). The order Claude Code starts plugins
+in is its own, not a setting Overview controls. If a tracker's tab comes first, close the trackers' tabs and reopen
+them with `/plan-tracker`, `/git-tracker`, `/test-tracker`: they open after Overview.
 
 ## Needs
 
