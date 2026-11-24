@@ -231,17 +231,6 @@ async function tally($: EngineInterface) {
       // the first session in a new project: Claude Code makes the folder with the first reply
       error = (await $.fs.exists(dir).catch(() => true)) ? `Can't read ${dir}: ${why(err)}` : undefined
     }
-    // only a full listing says what is gone: a deleted transcript keeps its counts, its ids go, so the store holds
-    // only the ids on disk
-    if (error === undefined) {
-      const onDisk = new Set(found.map(f => f.path))
-      const gone = Object.entries(t.files).filter(([path, c]) => !onDisk.has(path) && c.ids.length > 0)
-      for (const [, c] of gone) c.ids = []
-      if (gone.length > 0) {
-        t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
-        t.isDirty = true
-      }
-    }
     for (const { path, size } of found) {
       const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, ids: [] }
       let pending = carry.get(path) ?? new Uint8Array(0)
@@ -277,6 +266,17 @@ async function tally($: EngineInterface) {
       t.files[path] = c
       if (pending.length > 0) carry.set(path, pending)
       else carry.delete(path)
+    }
+    // a deleted transcript keeps its counts, and its ids go, so the store holds only the ids on disk. Only after every
+    // file is listed and read to its end: a copy that lands with its parent's deletion has its ids by then
+    if (error === undefined && !isBehind) {
+      const onDisk = new Set(found.map(f => f.path))
+      const gone = Object.entries(t.files).filter(([path, c]) => !onDisk.has(path) && c.ids.length > 0)
+      for (const [, c] of gone) c.ids = []
+      if (gone.length > 0) {
+        t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
+        t.isDirty = true
+      }
     }
     t.isBehind = isBehind
     t.isCounted = t.isCounted || !isBehind

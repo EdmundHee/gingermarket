@@ -665,8 +665,8 @@ describe('overview', () => {
     expect(await textOf(pane, 'tokens:error')).toContain("Can't read s2.jsonl")
     expect((await pane.find({ type: 'Text', text: /^Can't read/ }))?.props.dimColor).toBe(true)
     expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
-    // s0 is gone from disk: its counts stay, its ids go
-    expect(seen.stores.at(-1)?.value.files['/p/s0.jsonl']).toMatchObject({ parts: [0, 0, 0, 1_000_000], ids: [] })
+    // s0 is gone from disk: its counts stay. Its ids stay too while s2 can't be read: s2 may hold copies of them
+    expect(seen.stores.at(-1)?.value.files['/p/s0.jsonl']).toMatchObject({ parts: [0, 0, 0, 1_000_000], ids: [41, 42] })
   })
 
   test('tokens_copied_rows_count_once', async ($, on) => {
@@ -711,6 +711,22 @@ describe('overview', () => {
     const kept = seen.stores.at(-1)?.value.files ?? {}
     expect(kept['/p/s2.jsonl']).toMatchObject({ parts: [5, 50, 500, 5000], ids: [] })
     expect(kept['/p/d4.jsonl']?.parts).toEqual([1, 1, 1, 1])
+  })
+
+  test('tokens_parent_deleted_as_its_copy_lands', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const files = seed.files ?? {}
+    const seen = await start($, on, seed)
+    // between two tallies: a3 is resumed from s2 (copies b, adds h), and s2 is deleted
+    files['/p/a3.jsonl'] = `${usage('b', '2026-11-20T12:00:00Z', [2, 20, 200, 2000])}\n${usage('h', '2026-11-22T12:00:00Z', [8, 80, 800, 8000])}\n`
+    delete files['/p/s2.jsonl']
+
+    await seen.clock.advance(30_000)
+    const pane = await mount($)
+
+    // 12221 + h's 8888; b not again
+    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
+    expect(seen.stores.at(-1)?.value.files['/p/s2.jsonl']?.ids).toEqual([])
   })
 
   test('tokens_unreadable_subagents_folder_shown', async ($, on) => {
