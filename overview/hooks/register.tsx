@@ -1,6 +1,7 @@
 /**
- * Overview pane: plan-tracker's, git-tracker's and test-tracker's session state in one tab, a row each. It reads their
- * state (any plugin reads any value; the owner alone writes it) and runs nothing: no git, no gh, no tests, no model.
+ * Overview pane: plan-tracker's, git-tracker's and test-tracker's session state in one tab, a row each, and this
+ * project's token count. It reads their state (any plugin reads any value; the owner alone writes it) and Claude Code's
+ * transcripts, keeps its token tally in its own store, and runs nothing: no git, no gh, no tests, no model.
  *
  * ponytail: the drawing below copies the trackers' own. Plugins install as separate folders, so there is no shared
  * import, and a `$` noun cannot carry functions. A change to a tracker's look needs the same change here:
@@ -31,14 +32,15 @@ type Scope = NonNullable<Run['scope']>
 const PANE = 'overview'
 const DOCK_COLUMNS = 48 // the trackers' dock width
 /** Each row's title color: theme keys with no pass/fail meaning, so a title never reads as a status. */
-const TITLE = { plan: 'planMode', git: 'claude', tests: 'ide' } as const
+const TITLE = { plan: 'planMode', git: 'claude', tests: 'ide', tokens: 'autoAccept' } as const
 
 /**
  * Each second: a redraw while a plan phase runs (not paused) or a test runs, or when a `… ago` label changes (each
  * second in its first minute, then at each whole minute of its age). A tracker's own write already redraws the pane;
  * this is for the clocks between writes. Overview keeps its
  * own timer because a tracker's `$.ui.invalidate` passes only the hooks of plugins above it, and an installed Overview
- * loads after the trackers (chain order = `enabledPlugins` order).
+ * may load after the trackers (the order is Claude Code's). The same tick drives the token tally: each second while
+ * it is behind, else every 30 s.
  */
 let before: number | undefined // the previous tick's time: a label's minute is compared with it, not a window a late tick could skip
 
@@ -53,6 +55,195 @@ async function tick($: EngineInterface) {
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
   const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || was === undefined || minute(now, l.endedAt) !== minute(was, l.endedAt))
   if (running || relabel) $.ui.invalidate('ui.render')
+  if (tokens === undefined || (tokens !== 'none' && tokens.isBehind) || now - tallied >= TALLY_EVERY) void tally($)
+}
+
+// ---- tokens row (Claude Code's transcripts) -------------------------------------------------------------------------
+
+/** One transcript's tally, kept in the store: where counting stopped, and what it found before that. */
+type Counted = { offset: number; lastId?: string; first?: number; parts: number[]; months: Record<string, number> }
+/**
+ * This project's tally. `files` by path, kept for good: a transcript Claude Code deletes later still counts.
+ * `transcript`: this session's. `isCounted`: every file read to its end once; `isBehind`: the last tally ran out of
+ * budget.
+ */
+type Tokens = { dir: string; transcript: string; files: Record<string, Counted>; isCounted: boolean; isBehind: boolean; error?: string }
+
+const READ_MAX = 4 * 1024 * 1024 // the most one $.fs.read gives
+const TALLY_BUDGET = 8 * 1024 * 1024 // bytes per tally, well inside a hook's 10 s
+const TALLY_EVERY = 30_000
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const NEWLINE = 10
+
+let tokens: Tokens | 'none' | undefined // 'none': this session keeps no transcript
+let tallied = 0 // when the last tally started
+let tallying = false
+/** Bytes read past a file's offset with no `\n` yet: the next tally goes on after them instead of reading them again. */
+const carry = new Map<string, Uint8Array>()
+const decoder = new TextDecoder()
+
+const monthOf = (at: number) => {
+  const d = new Date(at)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+const fmtTokens = (n: number) =>
+  n < 1e3 ? `${n}` : n < 1e6 ? `${(n / 1e3).toFixed(1)}K` : n < 1e9 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1e9).toFixed(2)}B`
+const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
+const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
+
+/**
+ * One transcript row: an assistant row's `message.usage` counts input, output, cache write and cache read, once per
+ * message. A message's rows come one after another with the same usage, so a row with the previous row's id is skipped.
+ */
+function countLine(line: string, c: Counted) {
+  if (!line.includes('"usage"')) return
+  let row: unknown
+  try {
+    row = JSON.parse(line)
+  } catch {
+    return
+  }
+  if (typeof row !== 'object' || row === null) return
+  const { type, timestamp, message } = row as { type?: unknown; timestamp?: unknown; message?: { id?: unknown; usage?: Record<string, unknown> } }
+  const id = message?.id
+  const usage = message?.usage
+  if (type !== 'assistant' || typeof id !== 'string' || usage === undefined || id === c.lastId) return
+  c.lastId = id
+  const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
+    typeof n === 'number' ? n : 0,
+  )
+  parts.forEach((n, i) => {
+    c.parts[i] = (c.parts[i] ?? 0) + n
+  })
+  const at = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN
+  if (Number.isNaN(at)) return
+  c.first = Math.min(c.first ?? at, at)
+  const month = monthOf(at)
+  c.months[month] = (c.months[month] ?? 0) + parts.reduce((a, b) => a + b, 0)
+}
+
+/** Counts every complete line in `bytes`; returns how many bytes that used (up to and with the last `\n`). */
+function countLines(bytes: Uint8Array, c: Counted) {
+  let start = 0
+  for (let nl = bytes.indexOf(NEWLINE); nl >= 0; nl = bytes.indexOf(NEWLINE, start)) {
+    countLine(decoder.decode(bytes.subarray(start, nl)), c)
+    start = nl + 1
+  }
+  return start
+}
+
+const join = (a: Uint8Array, b: Uint8Array) => {
+  const out = new Uint8Array(a.length + b.length)
+  out.set(a)
+  out.set(b, a.length)
+  return out
+}
+
+/** The project folder's transcripts: `<id>.jsonl` and each session's `<id>/subagents/*.jsonl`, with their sizes. */
+async function transcripts($: EngineInterface, dir: string) {
+  const top = await $.fs.list(dir)
+  const jsonl = (entries: readonly { name: string; kind: string; size: number }[], at: string) =>
+    entries.filter(f => f.kind === 'file' && f.name.endsWith('.jsonl')).map(f => ({ path: `${at}/${f.name}`, size: f.size }))
+  const found = jsonl(top, dir)
+  for (const d of top.filter(f => f.kind === 'dir')) {
+    const at = `${dir}/${d.name}/subagents`
+    found.push(...jsonl(await $.fs.list(at).catch(() => []), at))
+  }
+  return found
+}
+
+/**
+ * Reads what the transcripts gained since the last tally, at most TALLY_BUDGET bytes, and keeps the counts in the
+ * store. A partial last line waits in `carry` for its end. One at a time: a tick that finds one running skips.
+ */
+async function tally($: EngineInterface) {
+  if (tallying) return
+  tallying = true
+  try {
+    tallied = await $.clock.now()
+    // read every time: /clear starts a new transcript with no session.start
+    const { transcriptPath } = await $.session.info()
+    if (transcriptPath === '') {
+      if (tokens !== 'none') $.ui.invalidate('ui.render')
+      tokens = 'none'
+      return
+    }
+    const dir = transcriptPath.slice(0, transcriptPath.lastIndexOf('/'))
+    if (tokens === undefined || tokens === 'none' || tokens.dir !== dir) {
+      const kept = await $.store.get(`tokens:${dir}`)
+      const files = typeof kept === 'object' && kept !== null ? (kept as Record<string, Counted>) : {}
+      tokens = { dir, transcript: transcriptPath, files, isCounted: false, isBehind: true }
+      carry.clear()
+    }
+    const t = tokens
+    const before = `${t.transcript}|${t.isCounted}|${t.error}`
+    t.transcript = transcriptPath
+    let budget = TALLY_BUDGET
+    let moved = false
+    let isBehind = false
+    let error: string | undefined
+    const found = await transcripts($, dir).catch((err: unknown) => {
+      error = `Can't read ${dir}: ${why(err)}`
+      return []
+    })
+    for (const { path, size } of found) {
+      let c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {} }
+      let pending = carry.get(path) ?? new Uint8Array(0)
+      // ponytail: a file shorter than what was read is a new file under the same name; counted from its start again
+      if (size < c.offset + pending.length) {
+        c = { offset: 0, parts: [0, 0, 0, 0], months: {} }
+        pending = new Uint8Array(0)
+      }
+      let at = c.offset + pending.length
+      while (at < size && budget > 0) {
+        let chunk: Uint8Array
+        try {
+          const { base64 } = await $.fs.read(path, { as: 'bytes', offset: at, length: Math.min(READ_MAX, size - at, budget) })
+          chunk = Uint8Array.fromBase64(base64)
+        } catch (err) {
+          error = `Can't read ${fileName(path)}: ${why(err)}`
+          break
+        }
+        if (chunk.length === 0) break
+        at += chunk.length
+        budget -= chunk.length
+        pending = join(pending, chunk)
+        const used = countLines(pending, c)
+        if (used > 0) {
+          c.offset += used
+          pending = pending.slice(used)
+          moved = true
+        }
+      }
+      if (at < size && budget <= 0) isBehind = true
+      t.files[path] = c
+      if (pending.length > 0) carry.set(path, pending)
+      else carry.delete(path)
+    }
+    t.isBehind = isBehind
+    t.isCounted = t.isCounted || !isBehind
+    t.error = error
+    if (moved) await $.store.set(`tokens:${dir}`, t.files)
+    if (moved || `${t.transcript}|${t.isCounted}|${t.error}` !== before) $.ui.invalidate('ui.render')
+  } finally {
+    tallying = false
+  }
+}
+
+/** This session's (its transcript and its subagents'), this month's and every kept file's tokens. */
+function tokenTotals(t: Tokens, now: number) {
+  const files = Object.entries(t.files)
+  const own = `${t.transcript.slice(0, -'.jsonl'.length)}/`
+  const all = (c: Counted) => c.parts.reduce((a, b) => a + b, 0)
+  const month = monthOf(now)
+  const first = Math.min(...files.map(([, c]) => c.first ?? Number.POSITIVE_INFINITY))
+  return {
+    session: files.filter(([p]) => p === t.transcript || p.startsWith(own)).reduce((n, [, c]) => n + all(c), 0),
+    month: files.reduce((n, [, c]) => n + (c.months[month] ?? 0), 0),
+    total: files.reduce((n, [, c]) => n + all(c), 0),
+    parts: [0, 1, 2, 3].map(i => files.reduce((n, [, c]) => n + (c.parts[i] ?? 0), 0)),
+    first: Number.isFinite(first) ? first : undefined,
+  }
 }
 
 const plan = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, { nextId: 1, plans: [] } as Tracker)
@@ -168,21 +359,26 @@ function tcStatus(v: View) {
 
 const PR_COLOR: Record<string, string> = { open: 'success', draft: 'inactive', merged: 'merged', closed: 'error' }
 
+const OPEN = { id: PANE, title: 'Overview', columns: DOCK_COLUMNS } as const
 // `focus` is the only open that raises a pane: one without it leaves the tab behind the last one opened (Features opens
-// after every plugin below it has started). It takes the keyboard at an empty prompt, and typing still lands there.
-const OPEN = { id: PANE, title: 'Overview', columns: DOCK_COLUMNS, focus: true } as const
+// after every plugin below it has started). It also takes the keyboard at an empty prompt: letters still land there,
+// but the first Up, Shift+Tab or Esc goes to the pane.
+const RAISE = { ...OPEN, focus: true } as const
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Open the Overview pane: plan, git and tests in one tab' })
-    void $.ui.open(OPEN)
+    // a reload finds its pane still up (the engine's record): leave the tab the person is on
+    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
+    void $.ui.open(isUp ? OPEN : RAISE)
+    void tally($)
     // a reload stops the old timer and runs this again; /clear keeps it
     $.clock.every(1_000, () => tick($))
     return next(e)
   })
 
   on('command.run', { command: PANE }, async $ => {
-    const opened = await $.ui.open(OPEN)
+    const opened = await $.ui.open(RAISE)
     return { text: opened.isPlaced ? 'Overview pane opened.' : `Overview pane waits: ${opened.reason}` }
   })
 
@@ -238,7 +434,10 @@ export const register: Register = on => {
             <Box flexGrow={1}>
               <Text dimColor wrap="truncate">{`✓ ${printable(p.title)}`}</Text>
             </Box>
-            <Text dimColor>{`${ok}/${p.items.length}${spent > 0 ? ` ${fmt(spent)}` : ''}`}</Text>
+            {/* never squeezed onto a second line by a long title */}
+            <Box flexShrink={0}>
+              <Text dimColor>{`${ok}/${p.items.length}${spent > 0 ? ` ${fmt(spent)}` : ''}`}</Text>
+            </Box>
           </Box>
         )
       }
@@ -280,8 +479,12 @@ export const register: Register = on => {
           </Box>
         )}
         {SOURCES.map(([source, label]) => {
-          const plans = t.plans.filter(p => sourceOf(p) === source)
-          if (plans.length === 0) return null
+          // the latest group only: plan-tracker puts a new one first, but the same plan approved again keeps its old
+          // place and the clock runs on it, so the clock's group wins
+          const all = t.plans.filter(p => sourceOf(p) === source)
+          const shown = all.find(p => p.id === t.clock?.group) ?? all[0]
+          if (shown === undefined) return null
+          const plans = [shown]
           const items = plans.flatMap(p => p.items)
           return (
             <Box flexDirection="column">
@@ -499,6 +702,52 @@ export const register: Register = on => {
       </Box>
     )
 
+    // ---- tokens ----
+
+    const tokenLine = (key: string, label: string, value: string) => (
+      <Box key={`tokens:${key}`} flexDirection="row" gap={1}>
+        <Box flexGrow={1}>
+          <Text wrap="truncate">{label}</Text>
+        </Box>
+        <Text>{value}</Text>
+      </Box>
+    )
+    const tokenCounts = () => {
+      if (tokens === 'none' || tokens === undefined || !tokens.isCounted) {
+        return (
+          <Box key="tokens:empty">
+            <Text dimColor>{tokens === 'none' ? 'No transcript to count.' : 'Counting tokens…'}</Text>
+          </Box>
+        )
+      }
+      const n = tokenTotals(tokens, now)
+      const since = n.first === undefined ? 'Total' : `Since ${new Date(n.first).getDate()} ${MONTHS[new Date(n.first).getMonth()]?.slice(0, 3)}`
+      const [, out = 0, write = 0, cached = 0] = n.parts
+      return (
+        <Box flexDirection="column">
+          {tokenLine('session', 'This session', fmtTokens(n.session))}
+          {tokenLine('month', MONTHS[new Date(now).getMonth()] ?? 'This month', fmtTokens(n.month))}
+          {tokenLine('since', since, fmtTokens(n.total))}
+          <Box key="tokens:parts">
+            <Text dimColor wrap="truncate">{`out ${fmtTokens(out)} · cache ${fmtTokens(write)} write + ${fmtTokens(cached)} read`}</Text>
+          </Box>
+        </Box>
+      )
+    }
+    const tokensRow = (
+      <Box key="tokens" flexDirection="column">
+        <Box key="tokens:title" marginBottom={1}>
+          <Text bold color={TITLE.tokens}>TOKENS</Text>
+        </Box>
+        {tokenCounts()}
+        {tokens !== undefined && tokens !== 'none' && tokens.error !== undefined && (
+          <Box key="tokens:error">
+            <Text dimColor wrap="truncate">{printable(tokens.error)}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+
     return (
       <Box flexDirection="column">
         {planRow}
@@ -506,6 +755,8 @@ export const register: Register = on => {
         {gitRow}
         {divider('tests')}
         {testsRow}
+        {divider('tokens')}
+        {tokensRow}
       </Box>
     )
   })

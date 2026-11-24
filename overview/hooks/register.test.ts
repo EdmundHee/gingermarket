@@ -18,8 +18,22 @@ const PLAN_FILE = '/home/u/.claude/plans/overview.md'
 const NOTE = '#298 #304 need you; press ▶ or ✓'
 const COMMAND = 'claude plugin test overview'
 
-/** What each tracker holds, read at call time so a test may swap it; a missing one was never written. */
-type Seed = { tracker?: Tracker; git?: GitView; tests?: { shape: string; value: TestView } }
+/**
+ * What each tracker holds, read at call time so a test may swap it; a missing one was never written. `transcript`:
+ * `$.session.info().transcriptPath` (empty: none kept). `files`: the transcripts on disk by absolute path, read at
+ * call time so a test may grow one; `deny`: paths whose read fails. `store`: overview's store at start. `panes`: the
+ * ids `$.ui.panes()` lists.
+ */
+type Seed = {
+  tracker?: Tracker
+  git?: GitView
+  tests?: { shape: string; value: TestView }
+  transcript?: string
+  files?: Record<string, string>
+  deny?: string[]
+  store?: Record<string, unknown>
+  panes?: string[]
+}
 
 const items = (n: number, verified: number): PlanItem[] =>
   Array.from({ length: n }, (_, i) => ({ id: i + 1, text: `item ${i + 1}`, status: i < verified ? 'verified' : 'open' }))
@@ -76,9 +90,61 @@ const TESTS: TestView = {
 
 const shaped = (value: TestView, shape = '2') => ({ shape, value })
 
+const MiB = 1024 * 1024
+/** One assistant row of a transcript, `[input, output, cache write, cache read]` tokens. */
+const usage = (id: string, at: string, [i, o, w, r]: [number, number, number, number], text = 'ok') =>
+  JSON.stringify({
+    type: 'assistant', timestamp: at,
+    message: { id, content: [{ type: 'text', text }], usage: { input_tokens: i, output_tokens: o, cache_creation_input_tokens: w, cache_read_input_tokens: r } },
+  })
+// s2: a user row, b twice (one message, two rows), a broken line, c with multi-byte text, then d with no end yet
+const S2_DONE = [
+  JSON.stringify({ type: 'user', timestamp: '2026-11-20T11:00:00Z', message: { content: 'hi' } }),
+  usage('b', '2026-11-20T12:00:00Z', [2, 20, 200, 2000]),
+  usage('b', '2026-11-20T12:00:00Z', [2, 20, 200, 2000]),
+  'not json {',
+  usage('c', '2026-11-20T12:05:00Z', [3, 30, 300, 3000], 'café ✓ 日本'),
+].map(l => `${l}\n`).join('')
+const S2_CUT = usage('d', '2026-11-20T12:10:00Z', [4, 40, 400, 4000])
+/** A project folder `/p`: s1 (October), s2 (this session, November) and s2's subagent a1. */
+const TRANSCRIPTS = (): Seed => ({
+  transcript: '/p/s2.jsonl',
+  files: {
+    '/p/s1.jsonl': `${usage('a', '2026-10-08T12:00:00Z', [1, 10, 100, 1000])}\n`,
+    '/p/s2.jsonl': S2_DONE + S2_CUT,
+    '/p/s2/subagents/a1.jsonl': `${usage('e', '2026-11-21T12:00:00Z', [5, 50, 500, 5000])}\n`,
+  },
+})
+
 function setup(on: On, seed: Seed) {
   const clock = mock.clock(on)
-  const seen = { clock, opened: [] as { id: string; title?: string; columns?: number }[], commands: [] as string[], sets: [] as string[], invalidates: 0 }
+  mock.store(on, seed.store)
+  const seen = {
+    clock, opened: [] as { id: string; title?: string; columns?: number; focus?: true }[], commands: [] as string[],
+    sets: [] as string[], invalidates: 0, reads: [] as { path: string; offset: number; length?: number }[],
+  }
+  on('ui.panes', () => ({ value: (seed.panes ?? []).map(id => ({ id, title: id, isShown: false, isFocused: false, isPlaced: true })) }))
+  on('session.info', () => ({
+    value: { transcriptPath: seed.transcript ?? '', sysname: 'Darwin', release: '25', machine: 'arm64', packageManagers: [], runtimes: [] },
+  }))
+  // a byte-true disk: sizes in UTF-8 bytes, reads cut to their range, folders listed as `dir`
+  const bytes = (path: string) => new TextEncoder().encode(seed.files?.[path] ?? '')
+  on('fs.list', (_$, e) => {
+    const pre = `${e.path}/`
+    const entries = new Map<string, { name: string; kind: 'file' | 'dir'; size: number; mtimeMs: number; isLink: boolean }>()
+    for (const path of Object.keys(seed.files ?? {}).filter(k => k.startsWith(pre))) {
+      const [name, ...rest] = path.slice(pre.length).split('/')
+      entries.set(name, rest.length ? { name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false } : { name, kind: 'file', size: bytes(path).length, mtimeMs: 0, isLink: false })
+    }
+    return entries.size ? { value: [...entries.values()] } : { deny: `ENOENT: ${e.path}` }
+  })
+  on('fs.read', (_$, e) => {
+    seen.reads.push({ path: e.path, offset: e.offset ?? 0, length: e.length })
+    if (seed.files?.[e.path] === undefined || seed.deny?.includes(e.path)) return { deny: `EACCES: ${e.path}` }
+    const from = e.offset ?? 0
+    const part = bytes(e.path).subarray(from, e.length === undefined ? undefined : from + e.length)
+    return { value: e.as === 'bytes' ? { base64: part.toBase64() } : new TextDecoder().decode(part) }
+  })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('command.register', (_$, e) => {
     seen.commands.push(e.name)
@@ -133,6 +199,14 @@ describe('overview', () => {
     expect(seen.commands).toContain('overview')
   })
 
+  test('reload_opens_without_focus', async ($, on) => {
+    const seen = await start($, on, { panes: ['overview'] })
+
+    expect(seen.opened).toHaveLength(1)
+    expect(seen.opened[0]).toMatchObject({ id: 'overview', title: 'Overview', columns: 48 })
+    expect(seen.opened[0]?.focus).toBeUndefined()
+  })
+
   test('command_reopens_overview_tab', async ($, on) => {
     const seen = await start($, on)
     seen.opened.length = 0
@@ -152,13 +226,15 @@ describe('overview', () => {
     const pane = await mount($)
 
     const titles = (await keys(pane)).filter(k => k.endsWith(':title'))
-    expect(titles).toEqual(['plan:title', 'git:title', 'tests:title'])
+    expect(titles).toEqual(['plan:title', 'git:title', 'tests:title', 'tokens:title'])
     expect(await textOf(pane, 'plan:title')).toBe('PLAN')
     expect(await textOf(pane, 'plan:empty')).toBe('No plan tracked yet.')
     expect(await textOf(pane, 'git:title')).toBe('GIT')
     expect(await textOf(pane, 'git:empty')).toBe('Reading git…')
     expect(await textOf(pane, 'tests:title')).toBe('TESTS')
     expect(await textOf(pane, 'tests:empty')).toBe('No test runs yet.')
+    expect(await textOf(pane, 'tokens:title')).toBe('TOKENS')
+    expect(await textOf(pane, 'tokens:empty')).toBe('No transcript to count.')
     expect(await pane.findAll({ type: 'Button' })).toHaveLength(0)
   })
 
@@ -385,7 +461,7 @@ describe('overview', () => {
     expect(seen.invalidates).toBe(quiet + 1) // once, at 3m
   })
 
-  test('plan_row_sections_in_order_with_totals', async ($, on) => {
+  test('plan_row_latest_group_per_section', async ($, on) => {
     const group = (id: string, file: string, n: number, ok: number) => ({ id, title: `plan ${id}`, file, approvedAt: '2026-11-23', items: items(n, ok) })
     const tracker: Tracker = {
       nextId: 60,
@@ -398,9 +474,24 @@ describe('overview', () => {
     const sections = (await keys(pane)).filter(k => k.startsWith('plan:section:'))
     expect(sections).toEqual(['plan:section:docs', 'plan:section:mode', 'plan:section:tasks'])
     expect(await textOf(pane, 'plan:section:docs')).toBe('PLAN DOCS1/2')
-    expect(await textOf(pane, 'plan:section:mode')).toBe('PLAN MODE43/46')
+    expect(await textOf(pane, 'plan:section:mode')).toBe('PLAN MODE42/44')
     expect(await textOf(pane, 'plan:section:tasks')).toBe('TASKS0/1')
-    expect(await textOf(pane, 'plan:head:m2')).toContain('▰▰▰▰▰▱▱▱▱▱ 1/2')
+    expect(await textOf(pane, 'plan:head:m1')).toContain('42/44')
+    expect(await pane.find({ key: 'plan:head:m2' })).toBeUndefined()
+    expect(await textOf(pane, 'plan:head:d1')).toContain('▰▰▰▰▰▱▱▱▱▱ 1/2')
+  })
+
+  test('plan_section_shows_the_clocks_group', async ($, on) => {
+    const group = (id: string, n: number, ok: number) => ({ id, title: `plan ${id}`, file: PLAN_FILE, approvedAt: '2026-11-23', items: items(n, ok), time: { dev: 60_000 } })
+    const tracker: Tracker = { nextId: 60, plans: [group('m1', 5, 3), group('m2', 2, 1)], clock: { group: 'm2', phase: 'dev', since: T - 30_000, session: 's1' } }
+    await start($, on, { tracker })
+
+    const pane = await mount($)
+
+    expect(await textOf(pane, 'plan:section:mode')).toBe('PLAN MODE1/2')
+    expect(await textOf(pane, 'plan:head:m2')).toContain('1/2')
+    expect(await textOf(pane, 'plan:time:m2:dev')).toBe('Dev●1m 30s')
+    expect(await pane.find({ key: 'plan:head:m1' })).toBeUndefined()
   })
 
   test(
@@ -429,7 +520,8 @@ describe('overview', () => {
   )
 
   test('rows_split_by_dividers_with_title_colors_and_spacing', async ($, on) => {
-    await start($, on, { tracker: planning(T), git: GIT, tests: shaped(TESTS) })
+    const seen = await start($, on, { tracker: planning(T), git: GIT, tests: shaped(TESTS), ...TRANSCRIPTS() })
+    await seen.clock.advance(1_000)
 
     const pane = await mount($)
     const wide = await textOf(pane, 'divider:git')
@@ -444,6 +536,9 @@ describe('overview', () => {
     expect(at('git:new')).toBeGreaterThan(at('git:title'))
     expect(at('divider:tests')).toBeGreaterThan(at('git:new'))
     expect(at('card:head')).toBeGreaterThan(at('divider:tests'))
+    expect(at('divider:tokens')).toBeGreaterThan(at('card:last:branch'))
+    expect(at('tokens:title')).toBeGreaterThan(at('divider:tokens'))
+    expect(at('tokens:since')).toBeGreaterThan(at('tokens:title'))
     expect(wide).toBe('─'.repeat(48))
     expect(narrow).toBe('─'.repeat(30))
     expect((await pane.find({ type: 'Text', text: /^─+$/ }))?.props.dimColor).toBe(true)
@@ -452,6 +547,9 @@ describe('overview', () => {
     expect((await pane.find({ key: 'plan:section:mode' }))?.props.marginBottom).toBe(1)
     expect((await pane.find({ key: 'git:title' }))?.props.marginBottom).toBe(1)
     expect((await pane.find({ key: 'tests:title' }))?.props.marginBottom).toBe(1)
+    expect((await pane.find({ key: 'tokens:title' }))?.props.marginBottom).toBe(1)
+    expect((await pane.find({ key: 'divider:tokens' }))?.props.marginY).toBe(1)
+    expect(await color(pane, /^TOKENS$/)).toBe('autoAccept')
     expect(await color(pane, /^PLAN MODE$/)).toBe('planMode')
     expect(await color(pane, /^GIT$/)).toBe('claude')
     expect(await color(pane, /^TESTS$/)).toBe('ide')
@@ -467,5 +565,79 @@ describe('overview', () => {
     expect((await pane.find({ key: 'plan' }))?.props.gap).toBe(1)
     expect(await textOf(pane, 'divider:git')).toBe('─'.repeat(48))
     expect(await textOf(pane, 'divider:tests')).toBe('─'.repeat(48))
+    expect(await textOf(pane, 'divider:tokens')).toBe('─'.repeat(48))
+  })
+
+  test('tokens_tally_session_month_and_since', async ($, on) => {
+    const seen = await start($, on, TRANSCRIPTS())
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // s2 + its subagent: b once (its repeated row skipped), c, e; d's line has no end yet
+    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
+    expect(await textOf(pane, 'tokens:month')).toBe('November11.1K')
+    expect(await textOf(pane, 'tokens:since')).toBe('Since 8 Oct12.2K')
+    expect(await textOf(pane, 'tokens:parts')).toBe('out 110 · cache 1.1K write + 11.0K read')
+    expect(await pane.find({ key: 'tokens:error' })).toBeUndefined()
+  })
+
+  test('tokens_add_only_new_bytes', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+    const counted = new TextEncoder().encode(S2_DONE).length
+    const files = seed.files ?? {}
+    files['/p/s2.jsonl'] = `${files['/p/s2.jsonl']}\n${usage('f', '2026-11-22T12:00:00Z', [6, 60, 600, 6000])}\n`
+    seen.reads.length = 0
+
+    await seen.clock.advance(30_000)
+    const pane = await mount($)
+
+    // d (4444) and f (6666) on top of 11110
+    expect(await textOf(pane, 'tokens:session')).toBe('This session22.2K')
+    expect(await textOf(pane, 'tokens:since')).toBe('Since 8 Oct23.3K')
+    const s2 = seen.reads.filter(r => r.path === '/p/s2.jsonl')
+    expect(s2[0]?.offset).toBe(counted + new TextEncoder().encode(S2_CUT).length)
+    expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
+  })
+
+  test('tokens_kept_across_sessions_and_read_errors_shown', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const s1 = new TextEncoder().encode(seed.files?.['/p/s1.jsonl'] ?? '').length
+    const first = Date.parse('2026-10-01T12:00:00Z')
+    seed.store = {
+      'tokens:/p': {
+        '/p/s0.jsonl': { offset: 500, lastId: 'z', first, parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 } },
+        '/p/s1.jsonl': { offset: s1, lastId: 'a', first: Date.parse('2026-10-08T12:00:00Z'), parts: [1, 10, 100, 1000], months: { '2026-10': 1111 } },
+      },
+    }
+    seed.deny = ['/p/s2.jsonl']
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // s0 (gone from disk) 1M + s1 1111 + a1 5555; s2 unreadable
+    expect(await textOf(pane, 'tokens:since')).toBe('Since 1 Oct1.0M')
+    expect(await textOf(pane, 'tokens:session')).toBe('This session5.6K')
+    expect(await textOf(pane, 'tokens:error')).toContain("Can't read s2.jsonl")
+    expect((await pane.find({ type: 'Text', text: /^Can't read/ }))?.props.dimColor).toBe(true)
+    expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
+  })
+
+  test('tokens_line_longer_than_one_read', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const big = `${JSON.stringify({ type: 'user', message: { content: 'x'.repeat(9 * MiB) } })}\n${usage('g', '2026-11-23T12:00:00Z', [7, 70, 700, 7000])}\n`
+    seed.files = { '/p/s2.jsonl': big }
+    const seen = await start($, on, seed)
+    const early = seen.reads.reduce((n, r) => n + (r.length ?? 0), 0)
+
+    await seen.clock.advance(1_000)
+    const pane = await mount($)
+
+    expect(early).toBeLessThanOrEqual(8 * MiB)
+    expect(await textOf(pane, 'tokens:session')).toBe('This session7.8K')
+    expect(seen.reads.reduce((n, r) => n + (r.length ?? 0), 0)).toBe(new TextEncoder().encode(big).length)
   })
 })

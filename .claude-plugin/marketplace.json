@@ -4,7 +4,7 @@
     "name": "Edmund Hee"
   },
   "metadata": {
-    "description": "Claude Code plugins by Edmund Hee: plan, git, feature and test panes beside the chat, an overview pane of plan, git and tests, and a plan-aware orchestrator for ralph-loop, and raven, an AI PM/CTO loop over Codex and Claude."
+    "description": "Claude Code plugins by Edmund Hee: plan, git, feature and test panes beside the chat, an overview pane of plan, git, tests and tokens, and a plan-aware orchestrator for ralph-loop, and raven, an AI PM/CTO loop over Codex and Claude."
   },
   "plugins": [
     {
