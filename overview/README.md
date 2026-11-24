@@ -51,7 +51,8 @@ out 2.6M · cache 8.7M write + 527.0M read
 - **Tokens**: tokens this project used, from Claude Code's transcripts of this folder: this session (with its
   subagents), this month, and every transcript counted so far, `Since` the first one's day, with the output and cache
   split. Tokens = input + output + cache write + cache read, once per model reply, as `/cost`-style tools count
-  them. The first count after install reads every transcript once (`Counting tokens…`, some seconds for ~100 MB);
+  them: a resumed session's transcript repeats its parent's replies and links its subagent files, and those count
+  once. The first count after install reads every transcript once (`Counting tokens…`, some seconds for ~100 MB);
   after that only what was added, every 30 s. Transcripts Claude Code deletes later (`cleanupPeriodDays`) stay
   counted. A session started in a worktree or a subfolder has its own transcript folder and is not counted here.
 

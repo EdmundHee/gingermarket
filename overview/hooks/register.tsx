@@ -61,13 +61,24 @@ async function tick($: EngineInterface) {
 // ---- tokens row (Claude Code's transcripts) -------------------------------------------------------------------------
 
 /** One transcript's tally, kept in the store: where counting stopped, and what it found before that. */
-type Counted = { offset: number; lastId?: string; first?: number; parts: number[]; months: Record<string, number> }
+type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number> }
 /**
- * This project's tally. `files` by path, kept for good: a transcript Claude Code deletes later still counts.
- * `transcript`: this session's. `isCounted`: every file read to its end once; `isBehind`: the last tally ran out of
- * budget.
+ * This project's tally. `files` by path, kept for good: a transcript Claude Code deletes later still counts. `seen`:
+ * the messages counted, by id hash, across every file: a resumed session's transcript starts with copies of its
+ * parent's rows, same ids. `transcript`: this session's. `isCounted`: every file read to its end once; `isBehind`: the
+ * last tally ran out of budget.
  */
-type Tokens = { dir: string; transcript: string; files: Record<string, Counted>; isCounted: boolean; isBehind: boolean; error?: string }
+type Tokens = {
+  dir: string
+  transcript: string
+  files: Record<string, Counted>
+  seen: Set<number>
+  isCounted: boolean
+  isBehind: boolean
+  error?: string
+}
+/** What the store keeps per project folder. */
+type Kept = { files?: Record<string, Counted>; seen?: number[] }
 
 const READ_MAX = 4 * 1024 * 1024 // the most one $.fs.read gives
 const TALLY_BUDGET = 8 * 1024 * 1024 // bytes per tally, well inside a hook's 10 s
@@ -88,14 +99,21 @@ const monthOf = (at: number) => {
 }
 const fmtTokens = (n: number) =>
   n < 1e3 ? `${n}` : n < 1e6 ? `${(n / 1e3).toFixed(1)}K` : n < 1e9 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1e9).toFixed(2)}B`
+// ponytail: a 32-bit FNV-1a hash keeps the store small (~11 bytes a message); two ids sharing one is ~1 in 10^5 per
+// project at 25k messages, and costs that one message's count. Store the ids themselves if that ever matters
+const idHash = (id: string) => {
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193)
+  return h >>> 0
+}
 const why = (err: unknown) => (err instanceof Error ? err.message : String(err))
 const fileName = (path: string) => path.slice(path.lastIndexOf('/') + 1)
 
 /**
  * One transcript row: an assistant row's `message.usage` counts input, output, cache write and cache read, once per
- * message. A message's rows come one after another with the same usage, so a row with the previous row's id is skipped.
+ * message id across the project. A message's several rows carry the same usage, and a resumed session repeats them.
  */
-function countLine(line: string, c: Counted) {
+function countLine(line: string, c: Counted, seen: Set<number>) {
   if (!line.includes('"usage"')) return
   let row: unknown
   try {
@@ -107,8 +125,10 @@ function countLine(line: string, c: Counted) {
   const { type, timestamp, message } = row as { type?: unknown; timestamp?: unknown; message?: { id?: unknown; usage?: Record<string, unknown> } }
   const id = message?.id
   const usage = message?.usage
-  if (type !== 'assistant' || typeof id !== 'string' || usage === undefined || id === c.lastId) return
-  c.lastId = id
+  if (type !== 'assistant' || typeof id !== 'string' || usage === undefined) return
+  const h = idHash(id)
+  if (seen.has(h)) return
+  seen.add(h)
   const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
     typeof n === 'number' ? n : 0,
   )
@@ -123,10 +143,10 @@ function countLine(line: string, c: Counted) {
 }
 
 /** Counts every complete line in `bytes`; returns how many bytes that used (up to and with the last `\n`). */
-function countLines(bytes: Uint8Array, c: Counted) {
+function countLines(bytes: Uint8Array, c: Counted, seen: Set<number>) {
   let start = 0
   for (let nl = bytes.indexOf(NEWLINE); nl >= 0; nl = bytes.indexOf(NEWLINE, start)) {
-    countLine(decoder.decode(bytes.subarray(start, nl)), c)
+    countLine(decoder.decode(bytes.subarray(start, nl)), c, seen)
     start = nl + 1
   }
   return start
@@ -170,9 +190,9 @@ async function tally($: EngineInterface) {
     }
     const dir = transcriptPath.slice(0, transcriptPath.lastIndexOf('/'))
     if (tokens === undefined || tokens === 'none' || tokens.dir !== dir) {
-      const kept = await $.store.get(`tokens:${dir}`)
-      const files = typeof kept === 'object' && kept !== null ? (kept as Record<string, Counted>) : {}
-      tokens = { dir, transcript: transcriptPath, files, isCounted: false, isBehind: true }
+      const raw = await $.store.get(`tokens:${dir}`)
+      const kept: Kept = typeof raw === 'object' && raw !== null ? raw : {}
+      tokens = { dir, transcript: transcriptPath, files: kept.files ?? {}, seen: new Set(kept.seen), isCounted: false, isBehind: true }
       carry.clear()
     }
     const t = tokens
@@ -208,7 +228,7 @@ async function tally($: EngineInterface) {
         at += chunk.length
         budget -= chunk.length
         pending = join(pending, chunk)
-        const used = countLines(pending, c)
+        const used = countLines(pending, c, t.seen)
         if (used > 0) {
           c.offset += used
           pending = pending.slice(used)
@@ -223,7 +243,7 @@ async function tally($: EngineInterface) {
     t.isBehind = isBehind
     t.isCounted = t.isCounted || !isBehind
     t.error = error
-    if (moved) await $.store.set(`tokens:${dir}`, t.files)
+    if (moved) await $.store.set(`tokens:${dir}`, { files: t.files, seen: [...t.seen] } satisfies Kept)
     if (moved || `${t.transcript}|${t.isCounted}|${t.error}` !== before) $.ui.invalidate('ui.render')
   } finally {
     tallying = false

@@ -21,7 +21,7 @@ const COMMAND = 'claude plugin test overview'
 /**
  * What each tracker holds, read at call time so a test may swap it; a missing one was never written. `transcript`:
  * `$.session.info().transcriptPath` (empty: none kept). `files`: the transcripts on disk by absolute path, read at
- * call time so a test may grow one; `deny`: paths whose read fails. `store`: overview's store at start. `panes`: the
+ * call time so a test may grow one; `deny`: paths whose read fails; `links`: paths listed as symbolic links. `store`: overview's store at start. `panes`: the
  * ids `$.ui.panes()` lists.
  */
 type Seed = {
@@ -31,6 +31,7 @@ type Seed = {
   transcript?: string
   files?: Record<string, string>
   deny?: string[]
+  links?: string[]
   store?: Record<string, unknown>
   panes?: string[]
 }
@@ -131,10 +132,15 @@ function setup(on: On, seed: Seed) {
   const bytes = (path: string) => new TextEncoder().encode(seed.files?.[path] ?? '')
   on('fs.list', (_$, e) => {
     const pre = `${e.path}/`
-    const entries = new Map<string, { name: string; kind: 'file' | 'dir'; size: number; mtimeMs: number; isLink: boolean }>()
+    const entries = new Map<string, { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; isLink: boolean }>()
     for (const path of Object.keys(seed.files ?? {}).filter(k => k.startsWith(pre))) {
       const [name, ...rest] = path.slice(pre.length).split('/')
-      entries.set(name, rest.length ? { name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false } : { name, kind: 'file', size: bytes(path).length, mtimeMs: 0, isLink: false })
+      entries.set(
+        name,
+        rest.length ? { name, kind: 'dir', size: 0, mtimeMs: 0, isLink: false }
+        : seed.links?.includes(path) ? { name, kind: 'other', size: 0, mtimeMs: 0, isLink: true }
+        : { name, kind: 'file', size: bytes(path).length, mtimeMs: 0, isLink: false },
+      )
     }
     return entries.size ? { value: [...entries.values()] } : { deny: `ENOENT: ${e.path}` }
   })
@@ -608,8 +614,11 @@ describe('overview', () => {
     const first = Date.parse('2026-10-01T12:00:00Z')
     seed.store = {
       'tokens:/p': {
-        '/p/s0.jsonl': { offset: 500, lastId: 'z', first, parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 } },
-        '/p/s1.jsonl': { offset: s1, lastId: 'a', first: Date.parse('2026-10-08T12:00:00Z'), parts: [1, 10, 100, 1000], months: { '2026-10': 1111 } },
+        files: {
+          '/p/s0.jsonl': { offset: 500, first, parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 } },
+          '/p/s1.jsonl': { offset: s1, first: Date.parse('2026-10-08T12:00:00Z'), parts: [1, 10, 100, 1000], months: { '2026-10': 1111 } },
+        },
+        seen: [],
       },
     }
     seed.deny = ['/p/s2.jsonl']
@@ -624,6 +633,24 @@ describe('overview', () => {
     expect(await textOf(pane, 'tokens:error')).toContain("Can't read s2.jsonl")
     expect((await pane.find({ type: 'Text', text: /^Can't read/ }))?.props.dimColor).toBe(true)
     expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
+  })
+
+  test('tokens_copied_rows_count_once', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const files = seed.files ?? {}
+    // a resumed session starts with the rows it carried over: the same message ids as s2's
+    files['/p/s3.jsonl'] = `${usage('b', '2026-11-20T12:00:00Z', [2, 20, 200, 2000])}\n${usage('h', '2026-11-22T12:00:00Z', [8, 80, 800, 8000])}\n`
+    // and links the subagent file it carried over instead of copying it
+    files['/p/s3/subagents/a1.jsonl'] = files['/p/s2/subagents/a1.jsonl'] ?? ''
+    seed.links = ['/p/s3/subagents/a1.jsonl']
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // 12221 + h's 8888
+    expect(await textOf(pane, 'tokens:since')).toBe('Since 8 Oct21.1K')
+    expect(seen.reads.filter(r => r.path === '/p/s3/subagents/a1.jsonl')).toHaveLength(0)
   })
 
   test('tokens_line_longer_than_one_read', async ($, on) => {
