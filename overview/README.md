@@ -71,7 +71,8 @@ Overview is also the tab shown at start. It opens with `focus`, the only open th
 without it the last tab to open (Features) is shown. `focus` also gives the pane the keyboard while the prompt is
 empty: letters still land in the prompt, but the first Up (history), Shift+Tab (mode) or Esc goes to the pane. One
 Esc, or a letter typed, gives the keys back. With text already in the prompt, or a dialog up, Claude Code refuses the
-focus and the pane opens behind. A plugin reload re-opens the pane without `focus`, so the tab you are on stays.
+focus and the pane opens behind. A plugin reload re-opens the pane without `focus`, so the tab you are on stays; if you closed Overview, a reload
+opens it in front again.
 `/overview` brings Overview to the front the same way. Like any pane Claude Code opens unasked, it is drawn from
 144 terminal columns; narrower, it waits until you run `/overview` or widen the terminal.
 
@@ -87,7 +88,8 @@ It runs nothing: no git, gh, test command or model call. It reads the three trac
 read another's; only the owner writes it) and redraws when they write. Its own timer checks each second and redraws
 while a plan phase or a test runs, or when a `… ago` label changes. The same timer reads the transcripts in
 `~/.claude/projects/<this folder>/` (the bytes added since the last read, at most 8 MiB a second) and writes the
-token tally to its own plugin store, keyed by that folder: a read offset and the counts per transcript.
+token tally to its own plugin store, keyed by that folder: per transcript a read offset, the counts, and a 4-byte hash
+of each reply's id while the transcript is on disk. A read or save that fails shows as a dim line under the counts.
 
 ## Install
 

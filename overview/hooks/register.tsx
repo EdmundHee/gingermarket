@@ -54,19 +54,22 @@ async function tick($: EngineInterface) {
   const minute = (at: number, ended: number) => Math.floor((at - ended) / 60_000)
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
   const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || was === undefined || minute(now, l.endedAt) !== minute(was, l.endedAt))
-  if (running || relabel) $.ui.invalidate('ui.render')
+  const remonth = was !== undefined && monthOf(now) !== monthOf(was) // the Tokens row's month label
+  if (running || relabel || remonth) $.ui.invalidate('ui.render')
   if (tokens === undefined || (tokens !== 'none' && tokens.isBehind) || now - tallied >= TALLY_EVERY) void tally($)
 }
 
 // ---- tokens row (Claude Code's transcripts) -------------------------------------------------------------------------
 
-/** One transcript's tally, kept in the store: where counting stopped, and what it found before that. */
-type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number> }
 /**
- * This project's tally. `files` by path, kept for good: a transcript Claude Code deletes later still counts. `seen`:
- * the messages counted, by id hash, across every file: a resumed session's transcript starts with copies of its
- * parent's rows, same ids. `transcript`: this session's. `isCounted`: every file read to its end once; `isBehind`: the
- * last tally ran out of budget.
+ * One transcript's tally, kept in the store: where counting stopped, what it found before that, and the id hashes of
+ * the messages it counted first. A resumed session's transcript starts with copies of its parent's rows, same ids.
+ */
+type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number>; ids: number[] }
+/**
+ * This project's tally. `files` by path, their counts kept for good: a transcript Claude Code deletes later still
+ * counts, and only its ids go. `seen`: every kept file's ids. `transcript`: this session's. `isCounted`: every file read
+ * to its end once; `isBehind`: the last tally ran out of budget; `isDirty`: counted since the last save.
  */
 type Tokens = {
   dir: string
@@ -75,10 +78,10 @@ type Tokens = {
   seen: Set<number>
   isCounted: boolean
   isBehind: boolean
-  error?: string
+  isDirty: boolean
 }
 /** What the store keeps per project folder. */
-type Kept = { files?: Record<string, Counted>; seen?: number[] }
+type Kept = { files?: Record<string, Counted> }
 
 const READ_MAX = 4 * 1024 * 1024 // the most one $.fs.read gives
 const TALLY_BUDGET = 8 * 1024 * 1024 // bytes per tally, well inside a hook's 10 s
@@ -89,6 +92,8 @@ const NEWLINE = 10
 let tokens: Tokens | 'none' | undefined // 'none': this session keeps no transcript
 let tallied = 0 // when the last tally started
 let tallying = false
+let problem: string | undefined // the last tally's read, save or count failure, shown under the counts
+let drawn = '' // what the last token redraw showed besides the counts
 /** Bytes read past a file's offset with no `\n` yet: the next tally goes on after them instead of reading them again. */
 const carry = new Map<string, Uint8Array>()
 const decoder = new TextDecoder()
@@ -97,10 +102,11 @@ const monthOf = (at: number) => {
   const d = new Date(at)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
+// the unit after rounding: 999,960 is 1.0M, not 1000.0K
 const fmtTokens = (n: number) =>
-  n < 1e3 ? `${n}` : n < 1e6 ? `${(n / 1e3).toFixed(1)}K` : n < 1e9 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1e9).toFixed(2)}B`
-// ponytail: a 32-bit FNV-1a hash keeps the store small (~11 bytes a message); two ids sharing one is ~1 in 10^5 per
-// project at 25k messages, and costs that one message's count. Store the ids themselves if that ever matters
+  n < 1e3 ? `${n}` : n < 999_950 ? `${(n / 1e3).toFixed(1)}K` : n < 999_950_000 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1e9).toFixed(2)}B`
+// ponytail: a 32-bit FNV-1a hash keeps the store small (~11 bytes a message). A project with 25k messages on disk has
+// a ~7% chance that two ids share one, which drops one message (~0.004% of the count); store the ids if that matters
 const idHash = (id: string) => {
   let h = 0x811c9dc5
   for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193)
@@ -122,13 +128,14 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
     return
   }
   if (typeof row !== 'object' || row === null) return
-  const { type, timestamp, message } = row as { type?: unknown; timestamp?: unknown; message?: { id?: unknown; usage?: Record<string, unknown> } }
+  const { type, timestamp, message } = row as { type?: unknown; timestamp?: unknown; message?: { id?: unknown; usage?: unknown } }
   const id = message?.id
-  const usage = message?.usage
-  if (type !== 'assistant' || typeof id !== 'string' || usage === undefined) return
+  if (type !== 'assistant' || typeof id !== 'string' || typeof message?.usage !== 'object' || message.usage === null) return
+  const usage = message.usage as Record<string, unknown>
   const h = idHash(id)
   if (seen.has(h)) return
   seen.add(h)
+  c.ids.push(h)
   const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
     typeof n === 'number' ? n : 0,
   )
@@ -159,17 +166,22 @@ const join = (a: Uint8Array, b: Uint8Array) => {
   return out
 }
 
-/** The project folder's transcripts: `<id>.jsonl` and each session's `<id>/subagents/*.jsonl`, with their sizes. */
+/**
+ * The project folder's transcripts: `<id>.jsonl` and each session's `<id>/subagents/*.jsonl` (a link, `other`, left
+ * out), oldest write first, so a parent is counted before the session resumed from it and keeps its replies.
+ */
 async function transcripts($: EngineInterface, dir: string) {
   const top = await $.fs.list(dir)
-  const jsonl = (entries: readonly { name: string; kind: string; size: number }[], at: string) =>
-    entries.filter(f => f.kind === 'file' && f.name.endsWith('.jsonl')).map(f => ({ path: `${at}/${f.name}`, size: f.size }))
+  const jsonl = (entries: readonly { name: string; kind: string; size: number; mtimeMs: number }[], at: string) =>
+    entries.filter(f => f.kind === 'file' && f.name.endsWith('.jsonl')).map(f => ({ path: `${at}/${f.name}`, size: f.size, mtime: f.mtimeMs }))
   const found = jsonl(top, dir)
   for (const d of top.filter(f => f.kind === 'dir')) {
     const at = `${dir}/${d.name}/subagents`
+    // ponytail: most session folders have no subagents/; an unreadable one reads as none too
     found.push(...jsonl(await $.fs.list(at).catch(() => []), at))
   }
-  return found
+  // ponytail: a parent resumed again after its child writes later than it; the child then gets the copies on a first count
+  return found.sort((a, b) => a.mtime - b.mtime)
 }
 
 /**
@@ -186,32 +198,50 @@ async function tally($: EngineInterface) {
     if (transcriptPath === '') {
       if (tokens !== 'none') $.ui.invalidate('ui.render')
       tokens = 'none'
+      problem = undefined
       return
     }
     const dir = transcriptPath.slice(0, transcriptPath.lastIndexOf('/'))
     if (tokens === undefined || tokens === 'none' || tokens.dir !== dir) {
       const raw = await $.store.get(`tokens:${dir}`)
-      const kept: Kept = typeof raw === 'object' && raw !== null ? raw : {}
-      tokens = { dir, transcript: transcriptPath, files: kept.files ?? {}, seen: new Set(kept.seen), isCounted: false, isBehind: true }
+      const files: Record<string, Counted> = (typeof raw === 'object' && raw !== null ? (raw as Kept).files : undefined) ?? {}
+      for (const c of Object.values(files)) c.ids ??= []
+      const seen = new Set(Object.values(files).flatMap(c => c.ids))
+      tokens = { dir, transcript: transcriptPath, files, seen, isCounted: false, isBehind: true, isDirty: false }
       carry.clear()
     }
     const t = tokens
-    const before = `${t.transcript}|${t.isCounted}|${t.error}`
     t.transcript = transcriptPath
     let budget = TALLY_BUDGET
     let moved = false
     let isBehind = false
     let error: string | undefined
-    const found = await transcripts($, dir).catch((err: unknown) => {
-      error = `Can't read ${dir}: ${why(err)}`
-      return []
-    })
+    let found: Awaited<ReturnType<typeof transcripts>> = []
+    let isListed = true
+    try {
+      found = await transcripts($, dir)
+    } catch (err) {
+      isListed = false
+      // the first session in a new project: Claude Code makes the folder with the first reply
+      if (await $.fs.exists(dir).catch(() => true)) error = `Can't read ${dir}: ${why(err)}`
+    }
+    if (isListed) {
+      // a deleted transcript keeps its counts; its ids go, so the store holds only what is on disk
+      const onDisk = new Set(found.map(f => f.path))
+      for (const [path, c] of Object.entries(t.files)) {
+        if (onDisk.has(path) || c.ids.length === 0) continue
+        for (const h of c.ids) t.seen.delete(h)
+        c.ids = []
+        t.isDirty = true
+      }
+    }
     for (const { path, size } of found) {
-      let c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {} }
+      const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, ids: [] }
       let pending = carry.get(path) ?? new Uint8Array(0)
-      // ponytail: a file shorter than what was read is a new file under the same name; counted from its start again
+      // a file shorter than what was read was rewritten: read again from its start, its counts kept; its ids skip the
+      // rows already counted, so only new ones add
       if (size < c.offset + pending.length) {
-        c = { offset: 0, parts: [0, 0, 0, 0], months: {} }
+        c.offset = 0
         pending = new Uint8Array(0)
       }
       let at = c.offset + pending.length
@@ -242,9 +272,25 @@ async function tally($: EngineInterface) {
     }
     t.isBehind = isBehind
     t.isCounted = t.isCounted || !isBehind
-    t.error = error
-    if (moved) await $.store.set(`tokens:${dir}`, { files: t.files, seen: [...t.seen] } satisfies Kept)
-    if (moved || `${t.transcript}|${t.isCounted}|${t.error}` !== before) $.ui.invalidate('ui.render')
+    t.isDirty = t.isDirty || moved
+    if (t.isDirty) {
+      // a failed save keeps the counts here and tries again next tally
+      try {
+        await $.store.set(`tokens:${dir}`, { files: t.files } satisfies Kept)
+        t.isDirty = false
+      } catch (err) {
+        error ??= `Can't save tokens: ${why(err)}`
+      }
+    }
+    problem = error
+    const shown = `${t.transcript}|${t.isCounted}|${problem}`
+    if (moved || shown !== drawn) $.ui.invalidate('ui.render')
+    drawn = shown
+  } catch (err) {
+    // session.info or the store failed: the next tick tries again
+    const shown = `Can't count tokens: ${why(err)}`
+    if (shown !== problem) $.ui.invalidate('ui.render')
+    problem = shown
   } finally {
     tallying = false
   }
@@ -389,7 +435,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: PANE, description: 'Open the Overview pane: plan, git and tests in one tab' })
     // a reload finds its pane still up (the engine's record): leave the tab the person is on
-    const isUp = (await $.ui.panes()).some(p => p.id === PANE)
+    // a failed lookup reads as not up: opening in front beats not opening
+    const isUp = (await $.ui.panes().catch(() => [])).some(p => p.id === PANE)
     void $.ui.open(isUp ? OPEN : RAISE)
     void tally($)
     // a reload stops the old timer and runs this again; /clear keeps it
@@ -760,9 +807,9 @@ export const register: Register = on => {
           <Text bold color={TITLE.tokens}>TOKENS</Text>
         </Box>
         {tokenCounts()}
-        {tokens !== undefined && tokens !== 'none' && tokens.error !== undefined && (
+        {problem !== undefined && (
           <Box key="tokens:error">
-            <Text dimColor wrap="truncate">{printable(tokens.error)}</Text>
+            <Text dimColor wrap="truncate">{printable(problem)}</Text>
           </Box>
         )}
       </Box>

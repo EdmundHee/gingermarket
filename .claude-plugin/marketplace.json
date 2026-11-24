@@ -35,7 +35,7 @@
     {
       "name": "overview",
       "source": "./overview",
-      "description": "Overview pane beside plan-tracker: one tab with three rows, the plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, and the test card from test-tracker; reads their state, runs nothing."
+      "description": "Overview pane beside plan-tracker: one tab with four rows, the latest plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, the test card from test-tracker, and this project's token count from Claude Code's transcripts; runs nothing."
     },
     {
       "name": "raven",
