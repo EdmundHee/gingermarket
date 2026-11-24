@@ -38,6 +38,14 @@ This session                                41.2M
 November                                   507.3M
 Since 8 Oct                                537.8M
 out 2.6M · cache 8.7M write + 527.0M read
+
+Days  Months
+                    █     ▁     62.3M
+          ▂         █   ▆ █
+          █     ▃▁  █  ▅█ ██
+      ▆▂  █    ▄██ ▁█  ██▅██ █
+ ▁▂▅▄ ██▆▃█▁ █▄███▆██▅▂███████  0
+26 Oct                  24 Nov
 ```
 
 - **Plan**: the latest plan of each source (`PLAN DOCS`, `PLAN MODE`, `TASKS`), folded as plan-tracker draws it: its
@@ -55,6 +63,10 @@ out 2.6M · cache 8.7M write + 527.0M read
   once. The first count after install reads every transcript once (`Counting tokens…`, some seconds for ~100 MB);
   after that only what was added, every 30 s. Transcripts Claude Code deletes later (`cleanupPeriodDays`) stay
   counted. A session started in a worktree or a subfolder has its own transcript folder and is not counted here.
+  Under the counts, a bar chart: **Days** (tokens per local day, the last 30, today last) or **Months** (the last 12),
+  the tallest bar's count at the top right. Click Days or Months to switch; the choice is kept. A narrow pane shows
+  fewer days or months, none under 20 columns. After updating from 0.2.0, the transcripts on disk are counted again
+  once, to split their months into days; deleted ones keep their counts and show in Months only.
 
 The pane opens at session start; `/overview` opens it again. Rows are split by a dim rule, each row's title in its own
 color (Plan teal, Git orange, Tests blue, Tokens purple). Times tick each second while a plan phase or a test run runs.
@@ -88,8 +100,8 @@ It runs nothing: no git, gh, test command or model call. It reads the three trac
 read another's; only the owner writes it) and redraws when they write. Its own timer checks each second and redraws
 while a plan phase or a test runs, or when a `… ago` label changes. The same timer reads the transcripts in
 `~/.claude/projects/<this folder>/` (the bytes added since the last read, at most 8 MiB a second) and writes the
-token tally to its own plugin store, keyed by that folder: per transcript a read offset, the counts, and a 4-byte hash
-of each reply's id while the transcript is on disk. A read or save that fails shows as a dim line under the counts.
+token tally to its own plugin store, keyed by that folder: per transcript a read offset, the counts (in all, per month,
+per day), and a 4-byte hash of each reply's id while the transcript is on disk; the chart choice under `chart`. A read or save that fails shows as a dim line under the counts.
 
 ## Install
 
