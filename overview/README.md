@@ -1,7 +1,7 @@
 # overview
 
-A Claude Code mod. An **Overview** pane, a tab beside plan-tracker's **Plan**, shows where the work stands in three
-rows, each drawn from its tracker's own data:
+A Claude Code mod. An **Overview** pane, a tab beside plan-tracker's **Plan**, shows where the work stands in four
+rows: three drawn from the trackers' own data, and this project's tokens:
 
 ```
 PLAN MODE                                   42/44
@@ -32,18 +32,32 @@ Branch TCs 6   ✓ 4  ✗ 1  · 1 not run
 
 Last full     ✓ 118/118   1h ago
 Last branch   ✗ 52/53   2m ago
+
+TOKENS
+This session                                41.2M
+November                                   507.3M
+Since 8 Oct                                537.8M
+out 2.6M · cache 8.7M write + 527.0M read
 ```
 
-- **Plan**: plan-tracker's plans, folded: each source (`PLAN DOCS`, `PLAN MODE`, `TASKS`) with its count, each plan's
-  title, bar and count, its time per phase (`●` on the one running) and Total, and its note. Items and buttons stay
-  in the Plan tab.
+- **Plan**: the latest plan of each source (`PLAN DOCS`, `PLAN MODE`, `TASKS`), folded as plan-tracker draws it: its
+  title, bar and count, its time per phase (`●` on the one running) and Total, and its note; a finished plan is one
+  `✓` line. The latest is the newest, or the one whose clock runs (a plan approved again keeps its old place). Older
+  plans, items and buttons stay in the Plan tab.
 - **Git**: git-tracker's branch line (the branch it was cut from, commits ahead and behind), the PR and its link, and
   the changed and new file counts with their line totals. The graph and the file list stay in the Git tab.
 - **Tests**: test-tracker's summary card: the run going now (else the newest), branch TCs, the last run per scope.
   The run history stays in the Tests tab.
+- **Tokens**: tokens this project used, from Claude Code's transcripts of this folder: this session (with its
+  subagents), this month, and every transcript counted so far, `Since` the first one's day, with the output and cache
+  split. Tokens = input + output + cache write + cache read, once per model reply, as `/cost`-style tools count
+  them: a resumed session's transcript repeats its parent's replies and links its subagent files, and those count
+  once. The first count after install reads every transcript once (`Counting tokens…`, some seconds for ~100 MB);
+  after that only what was added, every 30 s. Transcripts Claude Code deletes later (`cleanupPeriodDays`) stay
+  counted. A session started in a worktree or a subfolder has its own transcript folder and is not counted here.
 
 The pane opens at session start; `/overview` opens it again. Rows are split by a dim rule, each row's title in its own
-color (Plan teal, Git orange, Tests blue). Times tick each second while a plan phase or a test run runs.
+color (Plan teal, Git orange, Tests blue, Tokens purple). Times tick each second while a plan phase or a test run runs.
 
 ### Tab order
 
@@ -53,17 +67,29 @@ feature-tracker, ravenquill, overview, plan-tracker, git-tracker, test-tracker).
 in is its own, not a setting Overview controls. If a tracker's tab comes first, close the trackers' tabs and reopen
 them with `/plan-tracker`, `/git-tracker`, `/test-tracker`: they open after Overview.
 
+Overview is also the tab shown at start. It opens with `focus`, the only open that brings a pane to the front;
+without it the last tab to open (Features) is shown. `focus` also gives the pane the keyboard while the prompt is
+empty: letters still land in the prompt, but the first Up (history), Shift+Tab (mode) or Esc goes to the pane. One
+Esc, or a letter typed, gives the keys back. With text already in the prompt, or a dialog up, Claude Code refuses the
+focus and the pane opens behind. A plugin reload re-opens the pane without `focus`, so the tab you are on stays; if you closed Overview, a reload
+opens it in front again.
+`/overview` brings Overview to the front the same way. Like any pane Claude Code opens unasked, it is drawn from
+144 terminal columns; narrower, it waits until you run `/overview` or widen the terminal.
+
 ## Needs
 
 plan-tracker, git-tracker and test-tracker, installed and enabled: `plugin.json` lists them under `dependencies`. A
 row whose tracker has no data yet shows a one-line empty state (`No plan tracked yet.`, `Reading git…`,
-`No test runs yet.`).
+`No test runs yet.`). With no transcript kept for the session, the Tokens row says `No transcript to count.`
 
 ## What it runs and writes
 
-Nothing. It reads the three trackers' session state (any plugin may read another's; only the owner writes it) and
-redraws when they write. Its own timer checks each second and redraws while a plan phase or a test runs, or when a
-`… ago` label changes. No git, gh, test command or model call.
+It runs nothing: no git, gh, test command or model call. It reads the three trackers' session state (any plugin may
+read another's; only the owner writes it) and redraws when they write. Its own timer checks each second and redraws
+while a plan phase or a test runs, or when a `… ago` label changes. The same timer reads the transcripts in
+`~/.claude/projects/<this folder>/` (the bytes added since the last read, at most 8 MiB a second) and writes the
+token tally to its own plugin store, keyed by that folder: per transcript a read offset, the counts, and a 4-byte hash
+of each reply's id while the transcript is on disk. A read or save that fails shows as a dim line under the counts.
 
 ## Install
 
