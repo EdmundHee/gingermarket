@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker ; claude plugin test test-tracker ; claude plugin test overview`
-last run: 2026-11-24 · fix/overview-shown-tab 8663a20 · validate ✔ · plan-tracker 118/118 · git-tracker 24/24 · feature-tracker 90/90 · test-tracker 53/53 · overview 33/33; TC-324, TC-331 smoke pass on 8663a20 (tokens = Python tally exactly, fresh count)
+last run: 2026-11-24 · fix/overview-shown-tab 364d913 · validate ✔ · plan-tracker 118/118 · git-tracker 24/24 · feature-tracker 90/90 · test-tracker 53/53 · overview 34/34; TC-331 smoke pass on 364d913 (tokens = Python tally exactly, fresh count), TC-324 on 8663a20 (focus code unchanged since)
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -329,7 +329,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-339 | overview: month label turns at midnight | unit | clock 2 s before the runtime's 1 December 00:00; TC-326's folder; pane open | 1. advance 3 s | `November 11.1K` before, `December 0` after, on the same pane | overview/hooks/register.test.ts > tokens_month_label_turns_at_midnight | pass |
 | TC-340 | overview: a deleted parent's copies count once | unit | TC-326's folder plus `a3.jsonl` resumed from s2 (copies `b`, new `h`), counted | 1. s2 deleted, advance 30 s 2. `d4.jsonl` resumed from a3 (copies `b`, `h`, new `j`), advance 30 s | `Since` = TC-326's + `h` + `j`; s2's counts kept with no ids; d4 counts `j` only | overview/hooks/register.test.ts > tokens_deleted_parent_copies_count_once | pass |
 | TC-341 | overview: unreadable subagents folder | unit | TC-326's folder; listing `/p/s2/subagents` denied; store holds gone `s0.jsonl` with one id | 1. start 2. tick | `This session` = s2 alone; dim `Can't read a subagents folder: …`; s0's id kept (a partial listing deletes nothing) | overview/hooks/register.test.ts > tokens_unreadable_subagents_folder_shown | pass |
-| TC-342 | overview: a parent deleted as its copy lands | unit | TC-326 counted | 1. in one step: `a3.jsonl` resumed from s2 (copies `b`, new `h`) and s2 deleted 2. advance 30 s | `Since` = TC-326's + `h`; `b` not again; s2's ids dropped after a3 holds them | overview/hooks/register.test.ts > tokens_parent_deleted_as_its_copy_lands | |
+| TC-342 | overview: a parent deleted as its copy lands | unit | TC-326 counted | 1. in one step: `a3.jsonl` resumed from s2 (copies `b`, new `h`) and s2 deleted 2. advance 30 s | `Since` = TC-326's + `h`; `b` not again; s2's ids dropped after a3 holds them | overview/hooks/register.test.ts > tokens_parent_deleted_as_its_copy_lands | pass |
 
 ## Rules
 
