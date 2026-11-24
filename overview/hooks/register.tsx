@@ -63,13 +63,14 @@ async function tick($: EngineInterface) {
 
 /**
  * One transcript's tally, kept in the store: where counting stopped, what it found before that, and the id hashes of
- * the messages it counted first. A resumed session's transcript starts with copies of its parent's rows, same ids.
+ * every message it holds. A resumed session's transcript starts with copies of its parent's rows, same ids; it keeps
+ * them too, so a session resumed from it after the parent is deleted still skips them.
  */
 type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number>; ids: number[] }
 /**
  * This project's tally. `files` by path, their counts kept for good: a transcript Claude Code deletes later still
  * counts, and only its ids go. `seen`: every kept file's ids. `transcript`: this session's. `isCounted`: every file read
- * to its end once; `isBehind`: the last tally ran out of budget; `isDirty`: counted since the last save.
+ * to its end once; `isBehind`: the last tally ran out of budget; `isDirty`: changed since the last save.
  */
 type Tokens = {
   dir: string
@@ -133,9 +134,10 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
   if (type !== 'assistant' || typeof id !== 'string' || typeof message?.usage !== 'object' || message.usage === null) return
   const usage = message.usage as Record<string, unknown>
   const h = idHash(id)
+  // a message's rows come one after another: its id once per file
+  if (c.ids.at(-1) !== h) c.ids.push(h)
   if (seen.has(h)) return
   seen.add(h)
-  c.ids.push(h)
   const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
     typeof n === 'number' ? n : 0,
   )
@@ -168,20 +170,26 @@ const join = (a: Uint8Array, b: Uint8Array) => {
 
 /**
  * The project folder's transcripts: `<id>.jsonl` and each session's `<id>/subagents/*.jsonl` (a link, `other`, left
- * out), oldest write first, so a parent is counted before the session resumed from it and keeps its replies.
+ * out), oldest write first, so a parent is counted before the session resumed from it and keeps its replies. `error`:
+ * a subagents folder that is there but would not list; the rest still counts.
  */
 async function transcripts($: EngineInterface, dir: string) {
   const top = await $.fs.list(dir)
   const jsonl = (entries: readonly { name: string; kind: string; size: number; mtimeMs: number }[], at: string) =>
     entries.filter(f => f.kind === 'file' && f.name.endsWith('.jsonl')).map(f => ({ path: `${at}/${f.name}`, size: f.size, mtime: f.mtimeMs }))
   const found = jsonl(top, dir)
+  let error: string | undefined
   for (const d of top.filter(f => f.kind === 'dir')) {
     const at = `${dir}/${d.name}/subagents`
-    // ponytail: most session folders have no subagents/; an unreadable one reads as none too
-    found.push(...jsonl(await $.fs.list(at).catch(() => []), at))
+    try {
+      found.push(...jsonl(await $.fs.list(at), at))
+    } catch (err) {
+      // most session folders have no subagents/
+      if (await $.fs.exists(at).catch(() => true)) error = `Can't read a subagents folder: ${why(err)}`
+    }
   }
   // ponytail: a parent resumed again after its child writes later than it; the child then gets the copies on a first count
-  return found.sort((a, b) => a.mtime - b.mtime)
+  return { found: found.sort((a, b) => a.mtime - b.mtime), error }
 }
 
 /**
@@ -216,22 +224,21 @@ async function tally($: EngineInterface) {
     let moved = false
     let isBehind = false
     let error: string | undefined
-    let found: Awaited<ReturnType<typeof transcripts>> = []
-    let isListed = true
+    let found: Awaited<ReturnType<typeof transcripts>>['found'] = []
     try {
-      found = await transcripts($, dir)
+      ;({ found, error } = await transcripts($, dir))
     } catch (err) {
-      isListed = false
       // the first session in a new project: Claude Code makes the folder with the first reply
-      if (await $.fs.exists(dir).catch(() => true)) error = `Can't read ${dir}: ${why(err)}`
+      error = (await $.fs.exists(dir).catch(() => true)) ? `Can't read ${dir}: ${why(err)}` : undefined
     }
-    if (isListed) {
-      // a deleted transcript keeps its counts; its ids go, so the store holds only what is on disk
+    // only a full listing says what is gone: a deleted transcript keeps its counts, its ids go, so the store holds
+    // only the ids on disk
+    if (error === undefined) {
       const onDisk = new Set(found.map(f => f.path))
-      for (const [path, c] of Object.entries(t.files)) {
-        if (onDisk.has(path) || c.ids.length === 0) continue
-        for (const h of c.ids) t.seen.delete(h)
-        c.ids = []
+      const gone = Object.entries(t.files).filter(([path, c]) => !onDisk.has(path) && c.ids.length > 0)
+      for (const [, c] of gone) c.ids = []
+      if (gone.length > 0) {
+        t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
         t.isDirty = true
       }
     }
@@ -242,6 +249,7 @@ async function tally($: EngineInterface) {
       // rows already counted, so only new ones add
       if (size < c.offset + pending.length) {
         c.offset = 0
+        c.ids = []
         pending = new Uint8Array(0)
       }
       let at = c.offset + pending.length

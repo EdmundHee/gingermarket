@@ -21,7 +21,7 @@ const COMMAND = 'claude plugin test overview'
 /**
  * What each tracker holds, read at call time so a test may swap it; a missing one was never written. `transcript`:
  * `$.session.info().transcriptPath` (empty: none kept). `files`: the transcripts on disk by absolute path, read at
- * call time so a test may grow one; `deny`: paths whose read fails; `links`: paths listed as symbolic links;
+ * call time so a test may grow one; `deny`: paths whose read or listing fails; `links`: paths listed as symbolic links;
  * `mtimes`: a file's last write (else 0). `store`: overview's store at start; `storeFails`: which store call fails, read
  * at call time. `panes`: the ids `$.ui.panes()` lists.
  */
@@ -150,6 +150,7 @@ function setup(on: On, seed: Seed) {
   const bytes = (path: string) => new TextEncoder().encode(seed.files?.[path] ?? '')
   on('fs.exists', (_$, e) => ({ value: Object.keys(seed.files ?? {}).some(k => k === e.path || k.startsWith(`${e.path}/`)) }))
   on('fs.list', (_$, e) => {
+    if (seed.deny?.includes(e.path)) return { deny: `EACCES: ${e.path}` }
     const pre = `${e.path}/`
     const entries = new Map<string, { name: string; kind: 'file' | 'dir' | 'other'; size: number; mtimeMs: number; isLink: boolean }>()
     for (const path of Object.keys(seed.files ?? {}).filter(k => k.startsWith(pre))) {
@@ -688,6 +689,45 @@ describe('overview', () => {
     expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
     expect(await textOf(pane, 'tokens:session')).toBe('This session8.9K')
     expect(seen.reads.filter(r => r.path === '/p/a3/subagents/a1.jsonl')).toHaveLength(0)
+  })
+
+  test('tokens_deleted_parent_copies_count_once', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const files = seed.files ?? {}
+    // a3 resumed from s2 (copies b); counted; then s2 is deleted and d4 is resumed from a3 (copies b and h)
+    files['/p/a3.jsonl'] = `${usage('b', '2026-11-20T12:00:00Z', [2, 20, 200, 2000])}\n${usage('h', '2026-11-22T12:00:00Z', [8, 80, 800, 8000])}\n`
+    seed.mtimes = { '/p/a3.jsonl': 2 }
+    const seen = await start($, on, seed)
+    delete files['/p/s2.jsonl']
+    await seen.clock.advance(30_000)
+    files['/p/d4.jsonl'] = `${files['/p/a3.jsonl']}${usage('j', '2026-11-24T08:00:00Z', [1, 1, 1, 1])}\n`
+    seed.mtimes['/p/d4.jsonl'] = 3
+
+    await seen.clock.advance(30_000)
+    const pane = await mount($)
+
+    // 12221 + h's 8888 + j's 4; s2's counts kept, b and h not again
+    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
+    const kept = seen.stores.at(-1)?.value.files ?? {}
+    expect(kept['/p/s2.jsonl']).toMatchObject({ parts: [5, 50, 500, 5000], ids: [] })
+    expect(kept['/p/d4.jsonl']?.parts).toEqual([1, 1, 1, 1])
+  })
+
+  test('tokens_unreadable_subagents_folder_shown', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    seed.deny = ['/p/s2/subagents']
+    seed.store = { 'tokens:/p': { files: { '/p/s0.jsonl': { offset: 500, parts: [0, 0, 0, 7], months: {}, ids: [41] } } } }
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // s2's own 5555, a1 left out; the listing was not whole, so nothing is taken as deleted
+    expect(await textOf(pane, 'tokens:session')).toBe('This session5.6K')
+    const error = await textOf(pane, 'tokens:error')
+    expect(error.startsWith("Can't read a subagents folder: ")).toBe(true)
+    expect(error).toContain('EACCES: /p/s2/subagents') // the reason, after the kit's own `overview: $.fs.list:`
+    expect(seen.stores.at(-1)?.value.files['/p/s0.jsonl']?.ids).toEqual([41])
   })
 
   test('tokens_line_longer_than_one_read', async ($, on) => {
