@@ -2,7 +2,7 @@
 
 screen: n/a
 run: `claude plugin validate --strict . ; claude plugin test plan-tracker ; claude plugin test git-tracker ; claude plugin test feature-tracker ; claude plugin test test-tracker ; claude plugin test overview`
-last run: 2026-11-24 · feat/overview-token-chart (review fixes, pre-commit) · validate ✔ · plan-tracker 118/118 · git-tracker 24/24 · feature-tracker 90/90 · test-tracker 53/53 · overview 49/49; TC-350 smoke pass on b7dd88f (day max and November = Python tally, 0.2.0 store upgraded in 13 s)
+last run: 2026-11-24 · feat/overview-token-chart (acceptance r1 fix) · validate ✔ · plan-tracker 118/118 · git-tracker 24/24 · feature-tracker 90/90 · test-tracker 53/53 · overview 50/50; TC-350 smoke pass on b7dd88f and 0ab8b7f (day max, November and total = Python tally; 0.2.0 store upgraded in 14 s, saved once)
 out of scope: ralph-helper — markdown commands only, nothing for `claude plugin test`; TC-108 checks it installs.
 
 | ID | Feature | Type | Precondition | Steps | Expected | Code test | Status |
@@ -346,6 +346,7 @@ out of scope: ralph-helper — markdown commands only, nothing for `claude plugi
 | TC-356 | overview: day chart turns on the first tick | unit | clock 0.5 s before the runtime's midnight; TC-326's folder | 1. start, mount 2. advance 1 s (the timer's first tick) | the label shows the new day: the turn is checked against the day last drawn, not the previous tick | overview/hooks/register.test.ts > tokens_day_chart_first_tick_after_midnight | pass |
 | TC-357 | overview: bad usage numbers | unit | a reply with input -5, output 1e400, cache write 3, cache read `"7"` | 1. tick until counted 2. mount | parts stored `[0, 0, 3, 0]`; `This session3`; one full bar, `3` at the top right | overview/hooks/register.test.ts > tokens_bad_usage_numbers_count_zero | pass |
 | TC-358 | overview: 0.2.0 upgrade saves only when done | unit | store holds TC-326's files in 0.2.0 shape (real ids, no `days`); s2's read fails | 1. start 2. tick 3. s2 readable again 4. advance 30 s | 2: no tally saved (the store keeps 0.2.0's), `Counting tokens…`, `Can't read s2.jsonl` 4: one save, each file once; `This session11.1K`, `November11.1K` | overview/hooks/register.test.ts > tokens_upgrade_saves_only_when_done | pass |
+| TC-359 | overview: a 100B-plus peak fits | unit | one reply yesterday with 150,000,000,000 tokens | 1. tick until counted 2. redraw at 30 cols 3. press Months | 2: 21 day columns (one given up for the 7-wide `150.00B`), top row `…  150.00B` 30 wide 3: 7 month slots, 30 wide; no row over 30 | overview/hooks/register.test.ts > tokens_chart_big_peak_fits | pass |
 
 ## Rules
 

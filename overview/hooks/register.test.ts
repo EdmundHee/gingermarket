@@ -1115,6 +1115,24 @@ describe('overview', () => {
     expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
   })
 
+  test('tokens_chart_big_peak_fits', async ($, on) => {
+    const at = daysBack(1)
+    const seen = await start($, on, { transcript: '/p/s2.jsonl', files: { '/p/s2.jsonl': `${usage('a', at, [0, 0, 0, 150_000_000_000])}\n` } })
+    await seen.clock.advance(1_000)
+    const pane = await mount($)
+    const rows = async () => [...(await chartRows(pane)), await textOf(pane, 'tokens:chart:labels')]
+
+    await pane.redraw({ ...PANE, bodyColumns: 30 })
+    const days = await rows()
+    await pane.press({ key: 'tokens:view:months' })
+    const months = await rows()
+
+    // `150.00B` is 7 wide, one more than the 8 columns kept for the axis: the day chart gives up a column (21, not 22)
+    expect(days[0]).toBe(`${bars(21, { [colOf(T, at, 21)]: '█' })}  150.00B`)
+    expect(months[0]).toBe(`${bars(21, { 18: '█', 19: '█' })}  150.00B`)
+    expect(Math.max(...[...days, ...months].map(r => r.length))).toBe(30)
+  })
+
   test('tokens_day_chart_turns_at_midnight', async ($, on) => {
     const seen = setup(on, TRANSCRIPTS())
     const midnight = new Date(2026, 10, 24).getTime() // the runtime's own

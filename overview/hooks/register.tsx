@@ -905,12 +905,18 @@ export const register: Register = on => {
      */
     const chart = (n: ReturnType<typeof tokenTotals>) => {
       const cols = e.props.bodyColumns
-      // ponytail: 8 = 2 + the widest axis label under 100B (6); a 100B day or month runs one column over
       if (cols < 20) return null
       const isDays = chartView === 'days'
-      const count = isDays ? Math.min(CHART_DAYS, cols - 8) : Math.min(CHART_MONTHS, Math.floor((cols - 8) / 3))
-      const slots = isDays ? lastDays(now, count) : lastMonths(now, count)
-      const bars = isDays ? barRows(slots.map(at => n.days[dayOf(at)] ?? 0), 1, 0) : barRows(slots.map(at => n.months[monthOf(at)] ?? 0), 2, 1)
+      const fit = (count: number) => {
+        const slots = isDays ? lastDays(now, count) : lastMonths(now, count)
+        const bars = isDays ? barRows(slots.map(at => n.days[dayOf(at)] ?? 0), 1, 0) : barRows(slots.map(at => n.months[monthOf(at)] ?? 0), 2, 1)
+        return { count, slots, bars, over: bars === undefined ? 0 : count * (isDays ? 1 : 3) + 2 + fmtTokens(bars.max).length - cols }
+      }
+      // 8 columns kept for the axis: 2 + the widest label under 100B (6). A bigger peak gives up the columns it needs
+      // once: the smaller window's peak is no higher, so its label is no wider
+      let drawn = fit(isDays ? Math.min(CHART_DAYS, cols - 8) : Math.min(CHART_MONTHS, Math.floor((cols - 8) / 3)))
+      if (drawn.over > 0) drawn = fit(drawn.count - (isDays ? drawn.over : Math.ceil(drawn.over / 3)))
+      const { count, slots, bars } = drawn
       const first = dayLabel(slots[0] ?? now)
       const today = dayLabel(now)
       const labels = !isDays
