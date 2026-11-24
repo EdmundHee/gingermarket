@@ -54,19 +54,20 @@ async function tick($: EngineInterface) {
   const minute = (at: number, ended: number) => Math.floor((at - ended) / 60_000)
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
   const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || was === undefined || minute(now, l.endedAt) !== minute(was, l.endedAt))
-  const remonth = was !== undefined && monthOf(now) !== monthOf(was) // the Tokens row's month label
-  if (running || relabel || remonth) $.ui.invalidate('ui.render')
+  const reday = was !== undefined && dayOf(now) !== dayOf(was) // the Tokens row's month label and day chart
+  if (running || relabel || reday) $.ui.invalidate('ui.render')
   if (tokens === undefined || (tokens !== 'none' && tokens.isBehind) || now - tallied >= TALLY_EVERY) void tally($)
 }
 
 // ---- tokens row (Claude Code's transcripts) -------------------------------------------------------------------------
 
 /**
- * One transcript's tally, kept in the store: where counting stopped, what it found before that, and the id hashes of
- * every message it holds. A resumed session's transcript starts with copies of its parent's rows, same ids; it keeps
- * them too, so a session resumed from it after the parent is deleted still skips them.
+ * One transcript's tally, kept in the store: where counting stopped, what it found before that (in all, by local month
+ * and by local day), and the id hashes of every message it holds. A resumed session's transcript starts with copies of
+ * its parent's rows, same ids; it keeps them too, so a session resumed from it after the parent is deleted still skips
+ * them. No `days`: kept by 0.2.0, counted again once (see `tally`).
  */
-type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number>; ids: number[] }
+type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number>; days?: Record<string, number>; ids: number[] }
 /**
  * This project's tally. `files` by path, their counts kept for good: a transcript Claude Code deletes later still
  * counts, and only its ids go. `seen`: every kept file's ids. `transcript`: this session's. `isCounted`: every file read
@@ -95,6 +96,8 @@ let tallied = 0 // when the last tally started
 let tallying = false
 let problem: string | undefined // the last tally's read, save or count failure, shown under the counts
 let drawn = '' // what the last token redraw showed besides the counts
+/** The chart under the counts, kept in the store under `chart`; this module's copy survives /clear. */
+let chartView: 'days' | 'months' = 'days'
 /** Bytes read past a file's offset with no `\n` yet: the next tally goes on after them instead of reading them again. */
 const carry = new Map<string, Uint8Array>()
 const decoder = new TextDecoder()
@@ -103,6 +106,7 @@ const monthOf = (at: number) => {
   const d = new Date(at)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
+const dayOf = (at: number) => `${monthOf(at)}-${String(new Date(at).getDate()).padStart(2, '0')}`
 // the unit after rounding: 999,960 is 1.0M, not 1000.0K
 const fmtTokens = (n: number) =>
   n < 1e3 ? `${n}` : n < 999_950 ? `${(n / 1e3).toFixed(1)}K` : n < 999_950_000 ? `${(n / 1e6).toFixed(1)}M` : `${(n / 1e9).toFixed(2)}B`
@@ -147,8 +151,12 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
   const at = typeof timestamp === 'string' ? Date.parse(timestamp) : Number.NaN
   if (Number.isNaN(at)) return
   c.first = Math.min(c.first ?? at, at)
+  const n = parts.reduce((a, b) => a + b, 0)
   const month = monthOf(at)
-  c.months[month] = (c.months[month] ?? 0) + parts.reduce((a, b) => a + b, 0)
+  c.months[month] = (c.months[month] ?? 0) + n
+  const days = (c.days ??= {})
+  const day = dayOf(at)
+  days[day] = (days[day] ?? 0) + n
 }
 
 /** Counts every complete line in `bytes`; returns how many bytes that used (up to and with the last `\n`). */
@@ -231,8 +239,24 @@ async function tally($: EngineInterface) {
       // the first session in a new project: Claude Code makes the folder with the first reply
       error = (await $.fs.exists(dir).catch(() => true)) ? `Can't read ${dir}: ${why(err)}` : undefined
     }
+    // 0.2.0 kept no days. A file still there is counted again from its start, every count of it emptied and its ids
+    // out of `seen`, so nothing counts twice. A gone one keeps its counts with no days: Claude Code deletes transcripts
+    // past cleanupPeriodDays (30 by default), outside the day chart. Gone is known only from a full listing; till then
+    // the file stays as it is for a later tally.
+    // ponytail: a reply copied from a deleted parent into a file counted again counts once more, since the parent's
+    // ids went with it; one parent's replies at most, once
+    const listed = new Set(found.map(f => f.path))
+    const old = Object.entries(t.files).filter(([, c]) => c.days === undefined)
+    for (const [path, c] of old) {
+      if (listed.has(path)) t.files[path] = { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
+      else if (error === undefined) c.days = {}
+      else continue
+      carry.delete(path)
+      t.isDirty = true
+    }
+    if (old.some(([path]) => listed.has(path))) t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
     for (const { path, size } of found) {
-      const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, ids: [] }
+      const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
       let pending = carry.get(path) ?? new Uint8Array(0)
       // a file shorter than what was read was rewritten: read again from its start, its counts kept; its ids skip the
       // rows already counted, so only new ones add
@@ -270,8 +294,7 @@ async function tally($: EngineInterface) {
     // a deleted transcript keeps its counts, and its ids go, so the store holds only the ids on disk. Only after every
     // file is listed and read to its end: a copy that lands with its parent's deletion has its ids by then
     if (error === undefined && !isBehind) {
-      const onDisk = new Set(found.map(f => f.path))
-      const gone = Object.entries(t.files).filter(([path, c]) => !onDisk.has(path) && c.ids.length > 0)
+      const gone = Object.entries(t.files).filter(([path, c]) => !listed.has(path) && c.ids.length > 0)
       for (const [, c] of gone) c.ids = []
       if (gone.length > 0) {
         t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
@@ -304,20 +327,68 @@ async function tally($: EngineInterface) {
   }
 }
 
-/** This session's (its transcript and its subagents'), this month's and every kept file's tokens. */
+/** This session's (its transcript and its subagents'), this month's and every kept file's tokens; each day's and month's. */
 function tokenTotals(t: Tokens, now: number) {
   const files = Object.entries(t.files)
   const own = `${t.transcript.slice(0, -'.jsonl'.length)}/`
   const all = (c: Counted) => c.parts.reduce((a, b) => a + b, 0)
   const month = monthOf(now)
   const first = Math.min(...files.map(([, c]) => c.first ?? Number.POSITIVE_INFINITY))
+  const sum = (by: (c: Counted) => Record<string, number> | undefined) => {
+    const out: Record<string, number> = {}
+    for (const [, c] of files) for (const [k, n] of Object.entries(by(c) ?? {})) out[k] = (out[k] ?? 0) + n
+    return out
+  }
   return {
+    days: sum(c => c.days),
+    months: sum(c => c.months),
     session: files.filter(([p]) => p === t.transcript || p.startsWith(own)).reduce((n, [, c]) => n + all(c), 0),
     month: files.reduce((n, [, c]) => n + (c.months[month] ?? 0), 0),
     total: files.reduce((n, [, c]) => n + all(c), 0),
     parts: [0, 1, 2, 3].map(i => files.reduce((n, [, c]) => n + (c.parts[i] ?? 0), 0)),
     first: Number.isFinite(first) ? first : undefined,
   }
+}
+
+const BLOCKS = ' ▁▂▃▄▅▆▇█'
+const CHART_DAYS = 30
+const CHART_MONTHS = 12
+
+/**
+ * The chart's 5 bar rows, top first: each value `round(value / max × 40)` eighths, one with any tokens at least `▁`,
+ * `width` columns a bar and `gap` blank after it. `undefined` when every value is 0.
+ */
+function barRows(values: number[], width: number, gap: number) {
+  const max = Math.max(...values)
+  if (!(max > 0)) return undefined
+  const eighths = values.map(v => (v > 0 ? Math.max(1, Math.round((v / max) * 40)) : 0))
+  const rows = [4, 3, 2, 1, 0].map(r => eighths.map(e => (BLOCKS[Math.min(8, Math.max(0, e - r * 8))] ?? ' ').repeat(width) + ' '.repeat(gap)).join(''))
+  return { rows, max }
+}
+
+/** The `n` local days (or months) ending on `now`'s, oldest first. */
+const lastDays = (now: number, n: number) =>
+  Array.from({ length: n }, (_, i) => {
+    const d = new Date(now)
+    d.setHours(12, 0, 0, 0)
+    d.setDate(d.getDate() - (n - 1) + i)
+    return d.getTime()
+  })
+const lastMonths = (now: number, n: number) =>
+  Array.from({ length: n }, (_, i) => {
+    const d = new Date(now)
+    d.setHours(12, 0, 0, 0)
+    d.setDate(1)
+    d.setMonth(d.getMonth() - (n - 1) + i)
+    return d.getTime()
+  })
+const dayLabel = (at: number) => `${new Date(at).getDate()} ${MONTHS[new Date(at).getMonth()]?.slice(0, 3)}`
+
+async function setChart($: EngineInterface, view: typeof chartView) {
+  chartView = view
+  $.ui.invalidate('ui.render')
+  // a failed save still switches: this session keeps the choice
+  await $.store.set('chart', view).catch(err => $.ui.log(`overview: chart choice not saved: ${why(err)}`, { to: 'debug' }))
 }
 
 const plan = atom({ plugin: 'plan-tracker', key: 'tracker' } as const, { nextId: 1, plans: [] } as Tracker)
@@ -449,6 +520,8 @@ export const register: Register = on => {
     void tally($)
     // a reload stops the old timer and runs this again; /clear keeps it
     $.clock.every(1_000, () => tick($))
+    const saved = await $.store.get('chart').catch(() => undefined)
+    if (saved === 'days' || saved === 'months') chartView = saved
     return next(e)
   })
 
@@ -458,7 +531,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Link } = $.ui.resolve(e)
+    const { Box, Text, Link, Button } = $.ui.resolve(e)
     const t = await read($, plan)
     const g = await read($, git)
     const v = await read($, tests)
@@ -796,7 +869,7 @@ export const register: Register = on => {
         )
       }
       const n = tokenTotals(tokens, now)
-      const since = n.first === undefined ? 'Total' : `Since ${new Date(n.first).getDate()} ${MONTHS[new Date(n.first).getMonth()]?.slice(0, 3)}`
+      const since = n.first === undefined ? 'Total' : `Since ${dayLabel(n.first)}`
       const [, out = 0, write = 0, cached = 0] = n.parts
       return (
         <Box flexDirection="column">
@@ -806,6 +879,57 @@ export const register: Register = on => {
           <Box key="tokens:parts">
             <Text dimColor wrap="truncate">{`out ${fmtTokens(out)} · cache ${fmtTokens(write)} write + ${fmtTokens(cached)} read`}</Text>
           </Box>
+          {chart(n)}
+        </Box>
+      )
+    }
+    /**
+     * Days: the last 30 days, one column each; Months: the last 12, 2 columns and a gap each. Fewer in a narrow pane,
+     * every row inside it (the widest axis label is 6); none under 20 columns.
+     */
+    const chart = (n: ReturnType<typeof tokenTotals>) => {
+      const cols = e.props.bodyColumns
+      if (cols < 20) return null
+      const isDays = chartView === 'days'
+      const count = isDays ? Math.min(CHART_DAYS, cols - 8) : Math.min(CHART_MONTHS, Math.floor((cols - 8) / 3))
+      const slots = isDays ? lastDays(now, count) : lastMonths(now, count)
+      const bars = isDays ? barRows(slots.map(at => n.days[dayOf(at)] ?? 0), 1, 0) : barRows(slots.map(at => n.months[monthOf(at)] ?? 0), 2, 1)
+      const first = dayLabel(slots[0] ?? now)
+      const today = dayLabel(now)
+      const labels = !isDays
+        ? slots.map(at => MONTHS[new Date(at).getMonth()]?.[0] ?? '').join('  ')
+        : count < 13
+          ? today.padStart(count)
+          : `${first}${' '.repeat(count - first.length - today.length)}${today}`
+      return (
+        <Box key="tokens:chart" flexDirection="column" marginTop={1}>
+          <Box key="tokens:view" flexDirection="row" gap={2}>
+            {(['days', 'months'] as const).map(view => (
+              <Button key={`tokens:view:${view}`} plain dimColor={chartView !== view} onPress={() => setChart($, view)}>
+                <Text bold={chartView === view} color={chartView === view ? TITLE.tokens : undefined}>
+                  {view === 'days' ? 'Days' : 'Months'}
+                </Text>
+              </Button>
+            ))}
+          </Box>
+          {bars === undefined ? (
+            <Box key="tokens:chart:empty">
+              <Text dimColor wrap="truncate">{`No tokens in the last ${count} ${isDays ? 'days' : 'months'}.`}</Text>
+            </Box>
+          ) : (
+            [
+              ...bars.rows.map((row, i) => (
+                <Box key={`tokens:chart:${i + 1}`} flexDirection="row">
+                  <Text color={TITLE.tokens}>{row}</Text>
+                  {i === 0 && <Text dimColor>{`  ${fmtTokens(bars.max)}`}</Text>}
+                  {i === 4 && <Text dimColor>{'  0'}</Text>}
+                </Box>
+              )),
+              <Box key="tokens:chart:labels">
+                <Text dimColor>{labels}</Text>
+              </Box>,
+            ]
+          )}
         </Box>
       )
     }
