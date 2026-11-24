@@ -54,7 +54,10 @@ async function tick($: EngineInterface) {
   const minute = (at: number, ended: number) => Math.floor((at - ended) / 60_000)
   const running = (t.clock !== undefined && t.clock.phase !== 'waiting') || v.runs.some(r => r.exit === undefined)
   const relabel = Object.values(v.last).some(l => now - l.endedAt <= 60_000 || was === undefined || minute(now, l.endedAt) !== minute(was, l.endedAt))
-  const reday = was !== undefined && dayOf(now) !== dayOf(was) // the Tokens row's month label and day chart
+  // the Tokens row's month label and day chart, against the day last drawn: a draw at 23:59:59 and a first tick at
+  // 00:00:00 still turn
+  const reday = dayDrawn !== undefined && dayOf(now) !== dayDrawn
+  if (reday) dayDrawn = dayOf(now)
   if (running || relabel || reday) $.ui.invalidate('ui.render')
   if (tokens === undefined || (tokens !== 'none' && tokens.isBehind) || now - tallied >= TALLY_EVERY) void tally($)
 }
@@ -81,6 +84,7 @@ type Tokens = {
   isCounted: boolean
   isBehind: boolean
   isDirty: boolean
+  isUpgrading: boolean
 }
 /** What the store keeps per project folder. */
 type Kept = { files?: Record<string, Counted> }
@@ -98,6 +102,7 @@ let problem: string | undefined // the last tally's read, save or count failure,
 let drawn = '' // what the last token redraw showed besides the counts
 /** The chart under the counts, kept in the store under `chart`; this module's copy survives /clear. */
 let chartView: 'days' | 'months' = 'days'
+let dayDrawn: string | undefined // the local day the pane last drew (or was last asked to)
 /** Bytes read past a file's offset with no `\n` yet: the next tally goes on after them instead of reading them again. */
 const carry = new Map<string, Uint8Array>()
 const decoder = new TextDecoder()
@@ -142,8 +147,9 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
   if (c.ids.at(-1) !== h) c.ids.push(h)
   if (seen.has(h)) return
   seen.add(h)
+  // a count that is not a finite, positive number (-5, 1e400) is 0: it would cancel or swamp the rest
   const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
-    typeof n === 'number' ? n : 0,
+    typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0,
   )
   parts.forEach((n, i) => {
     c.parts[i] = (c.parts[i] ?? 0) + n
@@ -223,7 +229,7 @@ async function tally($: EngineInterface) {
       const files: Record<string, Counted> = (typeof raw === 'object' && raw !== null ? (raw as Kept).files : undefined) ?? {}
       for (const c of Object.values(files)) c.ids ??= []
       const seen = new Set(Object.values(files).flatMap(c => c.ids))
-      tokens = { dir, transcript: transcriptPath, files, seen, isCounted: false, isBehind: true, isDirty: false }
+      tokens = { dir, transcript: transcriptPath, files, seen, isCounted: false, isBehind: true, isDirty: false, isUpgrading: false }
       carry.clear()
     }
     const t = tokens
@@ -239,24 +245,29 @@ async function tally($: EngineInterface) {
       // the first session in a new project: Claude Code makes the folder with the first reply
       error = (await $.fs.exists(dir).catch(() => true)) ? `Can't read ${dir}: ${why(err)}` : undefined
     }
-    // 0.2.0 kept no days. A file still there is counted again from its start, every count of it emptied and its ids
-    // out of `seen`, so nothing counts twice. A gone one keeps its counts with no days: Claude Code deletes transcripts
-    // past cleanupPeriodDays (30 by default), outside the day chart. Gone is known only from a full listing; till then
-    // the file stays as it is for a later tally.
-    // ponytail: a reply copied from a deleted parent into a file counted again counts once more, since the parent's
-    // ids went with it; one parent's replies at most, once
+    // 0.2.0 kept no days. On a whole listing, a file still there is counted again from its start, every count of it
+    // emptied and its ids out of `seen`, so nothing counts twice; a gone one keeps its counts with no days (Claude Code
+    // deletes transcripts past cleanupPeriodDays, 30 by default, outside the day chart). Till the listing is whole, these
+    // files are not read: a copy in a folder that won't list would hold ids its original needs. Nothing is saved till
+    // the recount ends, so the 0.2.0 tally stays in the store through a quit or a read error.
+    // ponytail: a reply copied from a parent 0.2.0 saw deleted (its ids dropped) into a file counted again counts once
+    // more. No such parent in the stores at release (0 of 386 records gone); keep 0.2.0's ids of gone files if one shows
     const listed = new Set(found.map(f => f.path))
-    const old = Object.entries(t.files).filter(([, c]) => c.days === undefined)
+    const old = error === undefined ? Object.entries(t.files).filter(([, c]) => c.days === undefined) : []
     for (const [path, c] of old) {
       if (listed.has(path)) t.files[path] = { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
-      else if (error === undefined) c.days = {}
-      else continue
+      else c.days = {}
       carry.delete(path)
       t.isDirty = true
     }
-    if (old.some(([path]) => listed.has(path))) t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
+    if (old.some(([path]) => listed.has(path))) {
+      t.seen = new Set(Object.values(t.files).flatMap(c => c.ids))
+      t.isUpgrading = true
+      t.isCounted = false
+    }
     for (const { path, size } of found) {
       const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
+      if (c.days === undefined) continue // 0.2.0's, waiting for a whole listing
       let pending = carry.get(path) ?? new Uint8Array(0)
       // a file shorter than what was read was rewritten: read again from its start, its counts kept; its ids skip the
       // rows already counted, so only new ones add
@@ -302,9 +313,10 @@ async function tally($: EngineInterface) {
       }
     }
     t.isBehind = isBehind
-    t.isCounted = t.isCounted || !isBehind
+    if (t.isUpgrading && error === undefined && !isBehind) t.isUpgrading = false
+    t.isCounted = t.isCounted || (!isBehind && !t.isUpgrading)
     t.isDirty = t.isDirty || moved
-    if (t.isDirty) {
+    if (t.isDirty && !t.isUpgrading) {
       // a failed save keeps the counts here and tries again next tally
       try {
         await $.store.set(`tokens:${dir}`, { files: t.files } satisfies Kept)
@@ -521,7 +533,10 @@ export const register: Register = on => {
     // a reload stops the old timer and runs this again; /clear keeps it
     $.clock.every(1_000, () => tick($))
     const saved = await $.store.get('chart').catch(() => undefined)
-    if (saved === 'days' || saved === 'months') chartView = saved
+    if ((saved === 'days' || saved === 'months') && saved !== chartView) {
+      chartView = saved
+      $.ui.invalidate('ui.render') // the pane may have drawn Days already
+    }
     return next(e)
   })
 
@@ -536,6 +551,7 @@ export const register: Register = on => {
     const g = await read($, git)
     const v = await read($, tests)
     const now = await $.clock.now()
+    dayDrawn = dayOf(now)
 
     // ---- plan ----
 
@@ -889,6 +905,7 @@ export const register: Register = on => {
      */
     const chart = (n: ReturnType<typeof tokenTotals>) => {
       const cols = e.props.bodyColumns
+      // ponytail: 8 = 2 + the widest axis label under 100B (6); a 100B day or month runs one column over
       if (cols < 20) return null
       const isDays = chartView === 'days'
       const count = isDays ? Math.min(CHART_DAYS, cols - 8) : Math.min(CHART_MONTHS, Math.floor((cols - 8) / 3))
