@@ -1,6 +1,6 @@
 {
   "name": "overview",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Overview pane beside plan-tracker: one tab with four rows, the latest plan's progress and phase times from plan-tracker, the branch, PR and changed-file totals from git-tracker, the test card from test-tracker, and this project's token count from Claude Code's transcripts; runs nothing.",
   "author": { "name": "Edmund Hee" },
   "license": "MIT",
