@@ -1354,8 +1354,15 @@ describe('overview', () => {
     const at40 = { head: await pane.find({ key: 'tokens:head' }), in: await pane.find({ key: 'tokens:session:in' }), session: await line(pane, 'session') }
     const parts40 = await textOf(pane, 'tokens:parts')
     await pane.redraw({ ...PANE, bodyColumns: 20 })
+    const totals20 = await Promise.all(['session', 'month', 'since'].map(r => line(pane, r)))
+    const truncated = await Promise.all(
+      [/^This session$/, /^November$/, /^Since /, /^out /].map(async text => (await pane.find({ type: 'Text', text }))?.props.wrap),
+    )
 
-    // 4 columns of 8 leave 12 for the label at 44: the table; 11 at 43: the 0.3.0 lines
+    // 4 columns of 8 leave 12 for the label at 44: the table; 11 at 43: the 0.3.0 lines. At 20 each label and total fit
+    // (the widest 17); the labels and the longer `out · cache` line are cut to the pane, not wrapped
+    expect(Math.max(...totals20.map(t => t.length))).toBeLessThanOrEqual(20)
+    expect(truncated).toEqual(['truncate', 'truncate', 'truncate', 'truncate'])
     expect(at44).toEqual(['      10', '     100', '   11.0K', '   11.1K'])
     expect(at43).toBeUndefined()
     expect(at40).toEqual({ head: undefined, in: undefined, session: 'This session11.1K' })
