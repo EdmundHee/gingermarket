@@ -103,6 +103,7 @@ const TALLY_BUDGET = 8 * 1024 * 1024 // bytes per tally, well inside a hook's 10
 const TALLY_EVERY = 30_000
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const NEWLINE = 10
+const MAX_COUNT = 1e12 // tokens in one count of one reply; more is a broken row
 
 let tokens: Tokens | 'none' | undefined // 'none': this session keeps no transcript
 let tallied = 0 // when the last tally started
@@ -156,9 +157,10 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
   if (c.ids.at(-1) !== h) c.ids.push(h)
   if (seen.has(h)) return
   seen.add(h)
-  // a count that is not a finite, positive number (-5, 1e400) is 0: it would cancel or swamp the rest
+  // a count that is not a positive number up to a trillion (-5, 1e400, 1e308) is 0: it would cancel or swamp the rest,
+  // or two of them would sum past Infinity
   const parts = [usage.input_tokens, usage.output_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens].map(n =>
-    typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0,
+    typeof n === 'number' && n > 0 && n <= MAX_COUNT ? n : 0,
   )
   parts.forEach((n, i) => {
     c.parts[i] = (c.parts[i] ?? 0) + n
@@ -268,8 +270,9 @@ async function tally($: EngineInterface) {
     // chart). Till the listing is whole, these files are not read: a copy in a folder that won't list would hold ids
     // its original needs. Nothing is saved till the recount ends, so the old tally stays in the store through a quit
     // or a read error.
-    // ponytail: a reply copied from a parent deleted before this recount (its ids dropped) into a file counted again
-    // counts once more. Ceiling: those copied rows, once; keep the ids of gone files if that shows
+    // ponytail: the recount trusts what is on disk. A reply copied from a parent deleted before it (its ids dropped)
+    // counts once more; rows a transcript lost to a rewrite are no longer counted. Neither in the stores at 0.3.1's
+    // release (431 records: none gone, none shorter than its offset); keep the old counts beside the recount if one shows
     const listed = new Set(found.map(f => f.path))
     const old = error === undefined ? Object.entries(t.files).filter(([, c]) => isOld(c)) : []
     for (const [path, c] of old) {
@@ -958,7 +961,8 @@ export const register: Register = on => {
       // each column 2 wider than its longest cell, at least 8; a label narrower than 12 leaves no room for the table
       const widths = COLUMNS.map((_, i) => Math.max(8, ...rows.map(r => (r.cells[i]?.length ?? 0) + 2)))
       const isTable = e.props.bodyColumns - widths.reduce((a, b) => a + b, 0) >= 12
-      // a deleted transcript's tokens this month with no split kept (0.3.0 kept none): the split sums under the total
+      // tokens this month with no split: a deleted transcript's from 0.3.0, or one waiting to be counted again while a
+      // folder won't list. The split sums under the total
       const unsplit = n.month - n.monthParts.reduce((a, b) => a + b, 0)
       return (
         <Box flexDirection="column">
@@ -971,7 +975,7 @@ export const register: Register = on => {
               </Box>,
               unsplit > 0 && (
                 <Box key="tokens:unsplit">
-                  <Text dimColor wrap="truncate">{`${fmtTokens(unsplit)} of ${monthName} not split (transcripts deleted)`}</Text>
+                  <Text dimColor wrap="truncate">{`${fmtTokens(unsplit)} of ${monthName} not split (counted before 0.3.1)`}</Text>
                 </Box>
               ),
             ]
@@ -1030,9 +1034,14 @@ export const register: Register = on => {
         : first.length + 1 + today.length > end
           ? today.padStart(end)
           : `${first}${' '.repeat(end - first.length - today.length)}${today}`
-      // the axis: the peak at the top, half of it (whole tokens) on row 5, where the bars' halfway line is, 0 at the foot
+      // the axis: the peak at the top, half of it (whole tokens) on row 5, where the bars' halfway line is, 0 at the foot;
+      // no half under a peak of 2, where it would read the same as the peak
       const axis = (i: number) =>
-        bars === undefined ? '' : i === 0 ? fmtTokens(bars.max) : i === 4 ? fmtTokens(Math.round(bars.max / 2)) : i === CHART_ROWS - 1 ? '0' : ''
+        bars === undefined ? ''
+        : i === 0 ? fmtTokens(bars.max)
+        : i === 4 && bars.max >= 2 ? fmtTokens(Math.round(bars.max / 2))
+        : i === CHART_ROWS - 1 ? '0'
+        : ''
       return (
         <Box key="tokens:chart" flexDirection="column" marginTop={1}>
           <Box key="tokens:view" flexDirection="row" gap={2}>

@@ -34,22 +34,23 @@ Last full     ✓ 118/118   1h ago
 Last branch   ✗ 52/53   2m ago
 
 TOKENS
+
                       in     out   cache   total
-This session        8.1K    0.3M   40.9M   41.2M
-November           82.4K    2.4M  504.8M  507.3M
-Since 8 Oct        88.0K    2.6M  535.7M  537.8M
-cache = 8.7M write + 527.0M read
+This session           0       0       0       0
+November            5.0K    2.8M  536.7M  539.5M
+Since 20 Oct        5.3K    2.9M  559.9M  562.8M
+cache = 10.0M write + 550.0M read
 
 Days  Months
-                          █               62.3M
+                          █                202.2M
                           █
-                          █       ▃
-                      ▂   █     ▅ █
-                      █   █   ▁ █ █ █     31.2M
-              ▆       █ ▃ █ ▅ █ █ █ █
-          ▁   █ ▂   ▄ █ █ █ █ █ █ █ █
-  ▁ ▅ ▄ ▃ █ ▆ █ █ ▁ █ █ █ █ █ █ █ █ █ █   0
-5 Nov                               24 Nov
+                          █
+                          █
+                          █     ▅ ▃        101.1M
+                    ▂ ▃   █     █ █
+                    █ █   █   ▁ █ █
+                    █ █   █ ▁ █ █ █ ▃ ▂    0
+7 Nov                            26 Nov
 ```
 
 - **Plan**: the latest plan of each source (`PLAN DOCS`, `PLAN MODE`, `TASKS`), folded as plan-tracker draws it: its
