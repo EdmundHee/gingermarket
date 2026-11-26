@@ -152,7 +152,9 @@ const TRANSCRIPTS = (): Seed => ({
   },
 })
 
-type KeptFiles = { files: Record<string, { parts: number[]; ids: number[]; months?: Record<string, number>; days?: Record<string, number> }> }
+type KeptFiles = {
+  files: Record<string, { parts: number[]; ids: number[]; months?: Record<string, number>; days?: Record<string, number>; monthParts?: Record<string, number[]> }>
+}
 
 function setup(on: On, seed: Seed) {
   const clock = mock.clock(on)
@@ -242,16 +244,58 @@ const mount = ($: Engine) =>
 
 type Pane = Awaited<ReturnType<typeof mount>>
 const textOf = async (pane: Pane, key: string) => (await pane.find({ key }))?.text ?? ''
-/** The chart's 5 bar rows, top first, each with its axis label. */
-const chartRows = (pane: Pane) => Promise.all([1, 2, 3, 4, 5].map(r => textOf(pane, `tokens:chart:${r}`)))
-/** The month chart's initials for the 12 months ending `now`'s. */
-const monthInitials = (now: number) =>
-  Array.from({ length: 12 }, (_, i) => {
+/** A count row's label and total, as the narrow pane's lines read: `This session11.1K`. */
+const line = async (pane: Pane, row: string) =>
+  `${(await textOf(pane, `tokens:${row}:label`)).trim()}${(await textOf(pane, `tokens:${row}:total`)).trim()}`
+/** A table row's in, out, cache and total cells as drawn (padded). */
+const cells = (pane: Pane, row: string) => Promise.all(['in', 'out', 'cache', 'total'].map(c => textOf(pane, `tokens:${row}:${c}`)))
+/** The chart's 8 bar rows, top first, each with its axis label. */
+const chartRows = (pane: Pane) => Promise.all([1, 2, 3, 4, 5, 6, 7, 8].map(r => textOf(pane, `tokens:chart:${r}`)))
+/**
+ * The chart's bars in a `cols`-wide pane, as the plan lays them out: `count` bars spread over `cols − 8`, bar `i` from
+ * column `floor(i × width / count)`, one column short of its share (days at least 1 wide, months 2).
+ */
+const layout = (cols: number, isDays = true) => {
+  const width = cols - 8
+  const count = isDays ? Math.min(30, Math.floor(width / 2)) : Math.min(12, Math.floor(width / 3))
+  const bar = Math.max(isDays ? 1 : 2, Math.floor(width / count) - 1)
+  return { width, count, bar, start: (i: number) => Math.floor((i * width) / count) }
+}
+/** One chart row in a `cols`-wide pane: slot → its character, the bar's width each. */
+const chartRow = (cols: number, slots: Record<number, string>, isDays = true) => {
+  const { width, bar, start } = layout(cols, isDays)
+  const cells: Record<number, string> = {}
+  for (const [slot, ch] of Object.entries(slots)) for (let x = 0; x < bar; x++) cells[start(Number(slot)) + x] = ch
+  return bars(width, cells)
+}
+/** One day chart row in a `cols`-wide pane ending on `now`'s day: each timestamp's day drawn as its character. */
+const dayRow = (cols: number, now: number, days: [string, string][]) =>
+  chartRow(cols, Object.fromEntries(days.map(([at, ch]) => [colOf(now, at, layout(cols).count), ch])))
+/** The month chart's names for the months ending `now`'s: 3 letters under each bar when every slot has 4 columns. */
+const monthLabels = (now: number, cols = 48) => {
+  const { width, count, start } = layout(cols, false)
+  const line = Array.from({ length: width }, () => ' ')
+  for (let i = 0; i < count; i++) {
     const d = new Date(now)
     d.setDate(1)
-    d.setMonth(d.getMonth() - 11 + i)
-    return MON[d.getMonth()]?.[0] ?? ''
-  }).join('  ')
+    d.setMonth(d.getMonth() - (count - 1) + i)
+    const name = MON[d.getMonth()] ?? ''
+    ;[...(Math.floor(width / count) >= 4 ? name : name.slice(0, 1))].forEach((ch, j) => {
+      line[start(i) + j] = ch
+    })
+  }
+  return line.join('').trimEnd()
+}
+/** The day labels in a `cols`-wide pane ending on `now`'s day: the first day, and today ending under the last bar. */
+const dayLabels = (cols: number, now: number) => {
+  const { count, bar, start } = layout(cols)
+  const end = start(count - 1) + bar
+  const first = dayLabel(lastDays(now, count)[0] as Date)
+  const today = dayLabel(new Date(now))
+  return first.length + 1 + today.length > end ? today.padStart(end) : `${first}${' '.repeat(end - first.length - today.length)}${today}`
+}
+/** Each run of drawn columns in a chart row: where it starts and how wide it is. */
+const runs = (row: string) => [...row.matchAll(/[^ ]+/g)].map(m => ({ at: m.index ?? 0, width: m[0].length }))
 const keys = async (pane: Pane) => (await pane.findAll({ type: 'Box' })).map(b => b.key ?? '')
 const color = async (pane: Pane, text: RegExp) => (await pane.find({ type: 'Text', text }))?.props.color
 
@@ -646,10 +690,10 @@ describe('overview', () => {
     const pane = await mount($)
 
     // s2 + its subagent: b once (its repeated row skipped), c, e; d's line has no end yet
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
-    expect(await textOf(pane, 'tokens:month')).toBe('November11.1K')
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct12.2K`)
-    expect(await textOf(pane, 'tokens:parts')).toBe('out 110 · cache 1.1K write + 11.0K read')
+    expect(await line(pane, 'session')).toBe('This session11.1K')
+    expect(await line(pane, 'month')).toBe('November11.1K')
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct12.2K`)
+    expect(await textOf(pane, 'tokens:parts')).toBe('cache = 1.1K write + 11.0K read')
     expect(await pane.find({ key: 'tokens:error' })).toBeUndefined()
     // every part exactly: the screen's rounding hides a missing input count
     const kept = seen.stores.at(-1)?.value.files ?? {}
@@ -675,8 +719,8 @@ describe('overview', () => {
     await seen.clock.advance(30_000)
 
     // d (4444) and f (6666) on top of 11110
-    expect(await textOf(pane, 'tokens:session')).toBe('This session22.2K')
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct23.3K`)
+    expect(await line(pane, 'session')).toBe('This session22.2K')
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct23.3K`)
     const s2 = seen.reads.filter(r => r.path === '/p/s2.jsonl')
     expect(s2[0]?.offset).toBe(counted + new TextEncoder().encode(S2_CUT).length)
     expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
@@ -690,10 +734,13 @@ describe('overview', () => {
     seed.store = {
       'tokens:/p': {
         files: {
-          '/p/s0.jsonl': { offset: 500, first, parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 }, days: { [dayKey(first)]: 1_000_000 }, ids: [41, 42] },
+          '/p/s0.jsonl': {
+            offset: 500, first, parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 }, days: { [dayKey(first)]: 1_000_000 },
+            monthParts: { '2026-10': [0, 0, 0, 1_000_000] }, ids: [41, 42],
+          },
           '/p/s1.jsonl': {
             offset: s1, first: Date.parse('2026-10-08T12:00:00Z'), parts: [1, 10, 100, 1000], months: { '2026-10': 1111 },
-            days: { [dayKey('2026-10-08T12:00:00Z')]: 1111 },
+            days: { [dayKey('2026-10-08T12:00:00Z')]: 1111 }, monthParts: { '2026-10': [1, 10, 100, 1000] },
           },
         },
       },
@@ -705,8 +752,8 @@ describe('overview', () => {
     const pane = await mount($)
 
     // s0 (gone from disk) 1M + s1 1111 + a1 5555; s2 unreadable
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${new Date(first).getDate()} Oct1.0M`)
-    expect(await textOf(pane, 'tokens:session')).toBe('This session5.6K')
+    expect(await line(pane, 'since')).toBe(`Since ${new Date(first).getDate()} Oct1.0M`)
+    expect(await line(pane, 'session')).toBe('This session5.6K')
     expect(await textOf(pane, 'tokens:error')).toContain("Can't read s2.jsonl")
     expect((await pane.find({ type: 'Text', text: /^Can't read/ }))?.props.dimColor).toBe(true)
     expect(seen.reads.filter(r => r.path === '/p/s1.jsonl')).toHaveLength(0)
@@ -732,8 +779,8 @@ describe('overview', () => {
     const pane = await mount($)
 
     // 12221 + h's 8888; b stays s2's
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
-    expect(await textOf(pane, 'tokens:session')).toBe('This session8.9K')
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct21.1K`)
+    expect(await line(pane, 'session')).toBe('This session8.9K')
     expect(seen.reads.filter(r => r.path === '/p/a3/subagents/a1.jsonl')).toHaveLength(0)
   })
 
@@ -753,7 +800,7 @@ describe('overview', () => {
     const pane = await mount($)
 
     // 12221 + h's 8888 + j's 4; s2's counts kept, b and h not again
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct21.1K`)
     const kept = seen.stores.at(-1)?.value.files ?? {}
     expect(kept['/p/s2.jsonl']).toMatchObject({ parts: [5, 50, 500, 5000], ids: [] })
     expect(kept['/p/d4.jsonl']?.parts).toEqual([1, 1, 1, 1])
@@ -771,21 +818,21 @@ describe('overview', () => {
     const pane = await mount($)
 
     // 12221 + h's 8888; b not again
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct21.1K`)
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct21.1K`)
     expect(seen.stores.at(-1)?.value.files['/p/s2.jsonl']?.ids).toEqual([])
   })
 
   test('tokens_unreadable_subagents_folder_shown', async ($, on) => {
     const seed = TRANSCRIPTS()
     seed.deny = ['/p/s2/subagents']
-    seed.store = { 'tokens:/p': { files: { '/p/s0.jsonl': { offset: 500, parts: [0, 0, 0, 7], months: {}, days: {}, ids: [41] } } } }
+    seed.store = { 'tokens:/p': { files: { '/p/s0.jsonl': { offset: 500, parts: [0, 0, 0, 7], months: {}, days: {}, monthParts: {}, ids: [41] } } } }
     const seen = await start($, on, seed)
     await seen.clock.advance(1_000)
 
     const pane = await mount($)
 
     // s2's own 5555, a1 left out; the listing was not whole, so nothing is taken as deleted
-    expect(await textOf(pane, 'tokens:session')).toBe('This session5.6K')
+    expect(await line(pane, 'session')).toBe('This session5.6K')
     const error = await textOf(pane, 'tokens:error')
     expect(error.startsWith("Can't read a subagents folder: ")).toBe(true)
     expect(error).toContain('EACCES: /p/s2/subagents') // the reason, after the kit's own `overview: $.fs.list:`
@@ -807,8 +854,8 @@ describe('overview', () => {
     const pane = await mount($)
 
     expect(Math.max(...tallies)).toBeLessThanOrEqual(8 * MiB)
-    expect(await textOf(pane, 'tokens:session')).toBe('This session7.8K')
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct8.9K`)
+    expect(await line(pane, 'session')).toBe('This session7.8K')
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct8.9K`)
     const size = (text: string) => new TextEncoder().encode(text).length
     expect(tallies[0] + tallies[1]).toBe(size(other) + size(big))
   })
@@ -824,13 +871,13 @@ describe('overview', () => {
     const quiet = seen.reads.length
     await seen.clock.advance(1_000)
     const pane = await mount($)
-    const counted = await textOf(pane, 'tokens:session')
+    const counted = await line(pane, 'session')
     seed.transcript = '/p/s1.jsonl' // /clear: a new transcript, and no session.start
     await seen.clock.advance(30_000)
 
     expect(quiet).toBe(0)
     expect(counted).toBe('This session15.6K') // 11110 + d's 4444
-    expect(await textOf(pane, 'tokens:session')).toBe('This session1.1K')
+    expect(await line(pane, 'session')).toBe('This session1.1K')
   })
 
   test('tokens_rewritten_transcript_keeps_counts', async ($, on) => {
@@ -844,7 +891,7 @@ describe('overview', () => {
     const pane = await mount($)
 
     // 12221 + i's 9999; b and c kept, b not again
-    expect(await textOf(pane, 'tokens:since')).toBe(`Since ${S1_DAY} Oct22.2K`)
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct22.2K`)
     expect(seen.reads.find(r => r.path === '/p/s2.jsonl')?.offset).toBe(0)
   })
 
@@ -854,8 +901,8 @@ describe('overview', () => {
 
     const pane = await mount($)
 
-    expect(await textOf(pane, 'tokens:session')).toBe('This session0')
-    expect(await textOf(pane, 'tokens:since')).toBe('Total0')
+    expect(await line(pane, 'session')).toBe('This session0')
+    expect(await line(pane, 'since')).toBe('Total0')
     expect(await pane.find({ key: 'tokens:error' })).toBeUndefined()
   })
 
@@ -871,7 +918,7 @@ describe('overview', () => {
     await seen.clock.advance(30_000)
 
     expect(failed).toContain("Can't save tokens: ")
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
+    expect(await line(pane, 'session')).toBe('This session11.1K')
     expect(seen.stores).toHaveLength(tries + 1) // saved again with nothing new read
     expect(await pane.find({ key: 'tokens:error' })).toBeUndefined()
   })
@@ -896,9 +943,9 @@ describe('overview', () => {
 
     const pane = await mount($)
 
-    expect(await textOf(pane, 'tokens:session')).toBe('This session1.0M')
-    expect(await textOf(pane, 'tokens:since')).toBe('Total1.00B')
-    expect(await textOf(pane, 'tokens:parts')).toBe('out 0 · cache 0 write + 1.00B read')
+    expect(await line(pane, 'session')).toBe('This session1.0M')
+    expect(await line(pane, 'since')).toBe('Total1.00B')
+    expect(await textOf(pane, 'tokens:parts')).toBe('cache = 0 write + 1.00B read')
   })
 
   test('tokens_day_chart', async ($, on) => {
@@ -907,12 +954,10 @@ describe('overview', () => {
 
     const pane = await mount($)
 
-    // b+c's day and e's day, 5,555 each, the max; 8 Oct is outside the 30 days
-    const full = bars(30, { [colOf(T, '2026-11-20T12:00:00Z')]: '█', [colOf(T, '2026-11-21T12:00:00Z')]: '█' })
-    expect(await chartRows(pane)).toEqual([`${full}  5.6K`, full, full, full, `${full}  0`])
-    const first = dayLabel(lastDays(T)[0] as Date)
-    const today = dayLabel(new Date(T))
-    expect(await textOf(pane, 'tokens:chart:labels')).toBe(`${first}${' '.repeat(30 - first.length - today.length)}${today}`)
+    // b+c's day and e's day, 5,555 each, the max; 8 Oct is outside the 20 days 48 columns hold
+    const full = dayRow(48, T, [['2026-11-20T12:00:00Z', '█'], ['2026-11-21T12:00:00Z', '█']])
+    expect(await chartRows(pane)).toEqual([`${full}  5.6K`, full, full, full, `${full}  2.8K`, full, full, `${full}  0`])
+    expect(await textOf(pane, 'tokens:chart:labels')).toBe(dayLabels(48, T))
     expect((await pane.find({ type: 'Text', text: /^Days$/ }))?.props.bold).toBe(true)
     expect((await pane.find({ type: 'Text', text: /^Months$/ }))?.props.bold).toBe(false)
     expect((await pane.find({ key: 'tokens:view:months' }))?.props.dimColor).toBe(true)
@@ -937,10 +982,12 @@ describe('overview', () => {
     const monthsLook = await look()
     await pane.press({ key: 'tokens:view:days' })
 
-    // the 12 months ending T's: Oct (1,111) the 11th slot, Nov (11,110, the max) the 12th
-    const nov = bars(36, { 33: '█', 34: '█' })
-    expect(months).toEqual([`${nov}  11.1K`, nov, nov, nov, `${bars(36, { 30: '▄', 31: '▄', 33: '█', 34: '█' })}  0`])
-    expect(initials.trimEnd()).toBe(monthInitials(T))
+    // the 12 months ending T's: Oct (1,111: 6.4 of 64 eighths, 6) the 11th slot, Nov (11,110, the max) the 12th
+    const nov = chartRow(48, { 11: '█' }, false)
+    expect(months).toEqual([
+      `${nov}  11.1K`, nov, nov, nov, `${nov}  5.6K`, nov, nov, `${chartRow(48, { 10: '▆', 11: '█' }, false)}  0`,
+    ])
+    expect(initials).toBe(monthLabels(T))
     expect(afterMonths).toEqual(['months'])
     expect(saved()).toEqual(['months', 'days'])
     expect(monthsLook).toEqual([false, true, true, false])
@@ -954,25 +1001,28 @@ describe('overview', () => {
 
     const pane = await mount($)
 
-    expect((await textOf(pane, 'tokens:chart:labels')).trimEnd()).toBe(monthInitials(T))
+    expect(await textOf(pane, 'tokens:chart:labels')).toBe(monthLabels(T))
     expect((await pane.find({ type: 'Text', text: /^Months$/ }))?.props.bold).toBe(true)
   })
 
   test('tokens_bar_heights', async ($, on) => {
-    // the 1-token day is 25 days back, in October: last month's days are drawn too
-    const at = [daysBack(1), daysBack(2), daysBack(25)] as const
-    const rows = [usage('a', at[0], [0, 0, 0, 40_000]), usage('b', at[1], [0, 0, 0, 11_600]), usage('c', at[2], [0, 1, 0, 0])]
+    // all four days inside the 20 days 48 columns hold
+    const at = [daysBack(1), daysBack(2), daysBack(15)] as const
+    const rows = [usage('a', at[0], [0, 0, 0, 64_000]), usage('b', at[1], [0, 0, 0, 11_600]), usage('c', at[2], [0, 1, 0, 0])]
     const seen = await start($, on, { transcript: '/p/s2.jsonl', files: { '/p/s2.jsonl': rows.map(l => `${l}\n`).join('') } })
     await seen.clock.advance(1_000)
 
     const pane = await mount($)
 
-    // 40,000 is the max: 40 eighths; 11,600 is 11.6, rounded to 12: a row and ▄ (▃ if floored); 1 rounds to 0 and
-    // shows ▁; 3 days back has none
-    const [a, b, c] = at.map(x => colOf(T, x)) as [number, number, number]
-    const tall = bars(30, { [a]: '█' })
-    expect(c).toBe(4)
-    expect(await chartRows(pane)).toEqual([`${tall}  40.0K`, tall, tall, bars(30, { [a]: '█', [b]: '▄' }), `${bars(30, { [a]: '█', [b]: '█', [c]: '▁' })}  0`])
+    // 64,000 is the max: 64 eighths, all 8 rows; 11,600 is 11.6, rounded to 12: the bottom row and ▄ (▃ if floored);
+    // 1 rounds to 0 and shows ▁; 3 days back has none
+    expect(colOf(T, at[2], 20)).toBe(4)
+    const tall = dayRow(48, T, [[at[0], '█']])
+    expect(await chartRows(pane)).toEqual([
+      `${tall}  64.0K`, tall, tall, tall, `${tall}  32.0K`, tall,
+      dayRow(48, T, [[at[0], '█'], [at[1], '▄']]),
+      `${dayRow(48, T, [[at[0], '█'], [at[1], '█'], [at[2], '▁']])}  0`,
+    ])
   })
 
   test('tokens_upgrade_from_0_2_0_store', async ($, on) => {
@@ -1005,9 +1055,10 @@ describe('overview', () => {
     expect(kept['/p/s2/subagents/a1.jsonl']?.parts).toEqual([5, 50, 500, 5000])
     expect(kept['/p/s0.jsonl']).toMatchObject({ parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 } })
     expect(kept['/p/s0.jsonl']?.days).toEqual({})
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
-    expect(await textOf(pane, 'tokens:month')).toBe('November11.1K')
-    const full = bars(30, { [colOf(T, '2026-11-20T12:00:00Z')]: '█', [colOf(T, '2026-11-21T12:00:00Z')]: '█' })
+    expect(kept['/p/s0.jsonl']?.monthParts).toEqual({})
+    expect(await line(pane, 'session')).toBe('This session11.1K')
+    expect(await line(pane, 'month')).toBe('November11.1K')
+    const full = dayRow(48, T, [['2026-11-20T12:00:00Z', '█'], ['2026-11-21T12:00:00Z', '█']])
     expect((await chartRows(pane))[0]).toBe(`${full}  5.6K`)
   })
 
@@ -1049,7 +1100,7 @@ describe('overview', () => {
     expect(kept()['/p/s2.jsonl']).toMatchObject({ parts: [5, 50, 500, 5000], days: { [dayKey('2026-11-20T12:00:00Z')]: 5555 } })
     expect(kept()['/p/s2/subagents/a1.jsonl']).toMatchObject({ parts: [5, 50, 500, 5000], days: { [dayKey('2026-11-21T12:00:00Z')]: 5555 } })
     expect(kept()['/p/s0.jsonl']?.days).toEqual({})
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
+    expect(await line(pane, 'session')).toBe('This session11.1K')
   })
 
   test('tokens_upgrade_saves_only_when_done', async ($, on) => {
@@ -1083,8 +1134,8 @@ describe('overview', () => {
     // read on the next tally: one save, every file once
     expect(writes()).toHaveLength(1)
     expect(writes()[0]?.value.files['/p/s2.jsonl']?.parts).toEqual([5, 50, 500, 5000])
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
-    expect(await textOf(pane, 'tokens:month')).toBe('November11.1K')
+    expect(await line(pane, 'session')).toBe('This session11.1K')
+    expect(await line(pane, 'month')).toBe('November11.1K')
   })
 
   test('tokens_chart_fits_a_narrow_pane', async ($, on) => {
@@ -1092,27 +1143,26 @@ describe('overview', () => {
     await seen.clock.advance(1_000)
     const pane = await mount($)
     const widest = async () =>
-      Math.max(...(await Promise.all([1, 2, 3, 4, 5, 'labels'].map(r => textOf(pane, `tokens:chart:${r}`)))).map(t => t.length))
-    const day = (n: number) => bars(n, { [colOf(T, '2026-11-20T12:00:00Z', n)]: '█', [colOf(T, '2026-11-21T12:00:00Z', n)]: '█' })
+      Math.max(...(await Promise.all([1, 2, 3, 4, 5, 6, 7, 8, 'labels'].map(r => textOf(pane, `tokens:chart:${r}`)))).map(t => t.length))
+    const day = (cols: number) => dayRow(cols, T, [['2026-11-20T12:00:00Z', '█'], ['2026-11-21T12:00:00Z', '█']])
 
     await pane.redraw({ ...PANE, bodyColumns: 30 })
-    const at30 = { bottom: (await chartRows(pane))[4], labels: await textOf(pane, 'tokens:chart:labels'), widest: await widest() }
+    const at30 = { bottom: (await chartRows(pane))[7], labels: await textOf(pane, 'tokens:chart:labels'), widest: await widest() }
     await pane.press({ key: 'tokens:view:months' })
-    const months30 = { bottom: (await chartRows(pane))[4], widest: await widest() }
+    const months30 = { bottom: (await chartRows(pane))[7], widest: await widest() }
     await pane.redraw({ ...PANE, bodyColumns: 20 })
     await pane.press({ key: 'tokens:view:days' })
-    const at20 = { bottom: (await chartRows(pane))[4], labels: await textOf(pane, 'tokens:chart:labels'), widest: await widest() }
+    const at20 = { bottom: (await chartRows(pane))[7], labels: await textOf(pane, 'tokens:chart:labels'), widest: await widest() }
     await pane.redraw({ ...PANE, bodyColumns: 18 })
 
-    const today = dayLabel(new Date(T))
-    const first22 = dayLabel(lastDays(T, 22)[0] as Date)
-    expect(at30).toEqual({ bottom: `${day(22)}  0`, labels: `${first22}${' '.repeat(22 - first22.length - today.length)}${today}`, widest: 28 })
-    // 7 months: Oct the 6th slot, Nov the 7th
-    expect(months30).toEqual({ bottom: `${bars(21, { 15: '▄', 16: '▄', 18: '█', 19: '█' })}  0`, widest: 28 })
-    expect(at20).toEqual({ bottom: `${day(12)}  0`, labels: `${' '.repeat(12 - today.length)}${today}`, widest: 18 })
+    // 30 columns: 11 days, 2 columns each; 7 months (Oct the 6th slot, Nov the 7th); 20 columns: 6 days, today only
+    expect(layout(30).count).toBe(11)
+    expect(at30).toEqual({ bottom: `${day(30)}  0`, labels: dayLabels(30, T), widest: 28 })
+    expect(months30).toEqual({ bottom: `${chartRow(30, { 5: '▆', 6: '█' }, false)}  0`, widest: 29 }) // 22 + `  11.1K`
+    expect(at20).toEqual({ bottom: `${day(20)}  0`, labels: dayLabel(new Date(T)).padStart(11), widest: 18 })
     expect(await pane.find({ key: 'tokens:chart' })).toBeUndefined()
     expect(await pane.find({ key: 'tokens:view:days' })).toBeUndefined()
-    expect(await textOf(pane, 'tokens:session')).toBe('This session11.1K')
+    expect(await line(pane, 'session')).toBe('This session11.1K')
   })
 
   test('tokens_chart_big_peak_fits', async ($, on) => {
@@ -1127,8 +1177,9 @@ describe('overview', () => {
     await pane.press({ key: 'tokens:view:months' })
     const months = await rows()
 
-    // `150.00B` is 7 wide, one more than the 8 columns kept for the axis: the day chart gives up a column (21, not 22)
-    expect(days[0]).toBe(`${bars(21, { [colOf(T, at, 21)]: '█' })}  150.00B`)
+    // `150.00B` is 7 wide, one more than the 8 columns kept for the axis: the chart gives up a column (21 wide, not 22):
+    // 10 days, the day before T's the 9th; 7 months, Nov the 7th at 18
+    expect(days[0]).toBe(`${bars(21, { [Math.floor((colOf(T, at, 10) * 21) / 10)]: '█' })}  150.00B`)
     expect(months[0]).toBe(`${bars(21, { 18: '█', 19: '█' })}  150.00B`)
     expect(Math.max(...[...days, ...months].map(r => r.length))).toBe(30)
   })
@@ -1140,13 +1191,13 @@ describe('overview', () => {
     await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
     await seen.clock.settle()
     const pane = await mount($)
-    const before = (await chartRows(pane))[4]
+    const before = (await chartRows(pane))[7]
 
     await seen.clock.advance(3_000)
 
-    const bottom = (now: number) => `${bars(30, { [colOf(now, '2026-11-20T12:00:00Z')]: '█', [colOf(now, '2026-11-21T12:00:00Z')]: '█' })}  0`
+    const bottom = (now: number) => `${dayRow(48, now, [['2026-11-20T12:00:00Z', '█'], ['2026-11-21T12:00:00Z', '█']])}  0`
     expect(before).toBe(bottom(midnight - 2_000))
-    expect((await chartRows(pane))[4]).toBe(bottom(midnight + 1_000))
+    expect((await chartRows(pane))[7]).toBe(bottom(midnight + 1_000))
     expect((await textOf(pane, 'tokens:chart:labels')).endsWith(` ${dayLabel(new Date(midnight))}`)).toBe(true)
   })
 
@@ -1175,9 +1226,9 @@ describe('overview', () => {
 
     // -5, 1e400 (Infinity) and "7" are 0; only the 3 counts
     expect(seen.stores.filter(x => x.key === 'tokens:/p').at(-1)?.value.files['/p/s2.jsonl']?.parts).toEqual([0, 0, 3, 0])
-    expect(await textOf(pane, 'tokens:session')).toBe('This session3')
-    const bar = bars(30, { [colOf(T, at)]: '█' })
-    expect(await chartRows(pane)).toEqual([`${bar}  3`, bar, bar, bar, `${bar}  0`])
+    expect(await line(pane, 'session')).toBe('This session3')
+    const bar = dayRow(48, T, [[at, '█']])
+    expect(await chartRows(pane)).toEqual([`${bar}  3`, bar, bar, bar, `${bar}  2`, bar, bar, `${bar}  0`])
   })
 
   test('tokens_chart_grows_live', async ($, on) => {
@@ -1190,11 +1241,13 @@ describe('overview', () => {
 
     await seen.clock.advance(30_000)
 
-    // today 20,000, the max; 5,555 is 11 eighths: a full row and ▃
-    const [bc, e] = [colOf(T, '2026-11-20T12:00:00Z'), colOf(T, '2026-11-21T12:00:00Z')]
-    const top = bars(30, { 29: '█' })
+    // today 20,000, the max; 5,555 is 17.8 of 64 eighths, 18: two full rows and ▂
+    const today = new Date(T).toISOString()
+    const [bc, e] = ['2026-11-20T12:00:00Z', '2026-11-21T12:00:00Z']
+    const top = dayRow(48, T, [[today, '█']])
+    const low = dayRow(48, T, [[today, '█'], [bc, '█'], [e, '█']])
     expect(await chartRows(pane)).toEqual([
-      `${top}  20.0K`, top, top, bars(30, { 29: '█', [bc]: '▃', [e]: '▃' }), `${bars(30, { 29: '█', [bc]: '█', [e]: '█' })}  0`,
+      `${top}  20.0K`, top, top, top, `${top}  10.0K`, dayRow(48, T, [[today, '█'], [bc, '▂'], [e, '▂']]), low, `${low}  0`,
     ])
   })
 
@@ -1204,15 +1257,15 @@ describe('overview', () => {
     await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
     await seen.clock.settle()
     const pane = await mount($)
-    const empty = await pane.find({ type: 'Text', text: /^No tokens in the last 30 days\.$/ })
+    const empty = await pane.find({ type: 'Text', text: /^No tokens in the last 20 days\.$/ })
     const noBars = [...(await chartRows(pane)), await textOf(pane, 'tokens:chart:labels')]
 
     await pane.press({ key: 'tokens:view:months' })
 
     expect(empty?.props.dimColor).toBe(true)
-    expect(noBars).toEqual(['', '', '', '', '', ''])
+    expect(noBars).toEqual(['', '', '', '', '', '', '', '', ''])
     // the 12 months ending January 2027: Oct the 9th slot, Nov the 10th
-    expect((await chartRows(pane))[4]).toBe(`${bars(36, { 24: '▄', 25: '▄', 27: '█', 28: '█' })}  0`)
+    expect((await chartRows(pane))[7]).toBe(`${chartRow(48, { 8: '▆', 9: '█' }, false)}  0`)
   })
 
   test('tokens_no_chart_while_counting', async ($, on) => {
@@ -1235,8 +1288,8 @@ describe('overview', () => {
 
     await pane.press({ key: 'tokens:view:months' })
 
-    expect((await textOf(pane, 'tokens:chart:labels')).trimEnd()).toBe(monthInitials(T))
-    expect((await chartRows(pane))[4]).toBe(`${bars(36, { 30: '▄', 31: '▄', 33: '█', 34: '█' })}  0`)
+    expect(await textOf(pane, 'tokens:chart:labels')).toBe(monthLabels(T))
+    expect((await chartRows(pane))[7]).toBe(`${chartRow(48, { 10: '▆', 11: '█' }, false)}  0`)
     expect(seen.stores.filter(x => x.key === 'chart')).toHaveLength(1) // tried, and refused
   })
 
@@ -1246,11 +1299,213 @@ describe('overview', () => {
     await $.session.start({ cwd: CWD, surface: 'terminal', isInteractive: true })
     await seen.clock.settle()
     const pane = await mount($)
-    const before = await textOf(pane, 'tokens:month')
+    const before = await line(pane, 'month')
 
     await seen.clock.advance(3_000)
 
     expect(before).toBe('November11.1K')
-    expect(await textOf(pane, 'tokens:month')).toBe('December0')
+    expect(await line(pane, 'month')).toBe('December0')
+  })
+
+  test('tokens_table_split', async ($, on) => {
+    const seen = await start($, on, TRANSCRIPTS())
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // session and November: s2 + a1 = [10, 100, 1000, 10000]; since: + s1 [1, 10, 100, 1000]; cache = write + read
+    expect(await cells(pane, 'head')).toEqual(['      in', '     out', '   cache', '   total'])
+    expect(await cells(pane, 'session')).toEqual(['      10', '     100', '   11.0K', '   11.1K'])
+    expect(await cells(pane, 'month')).toEqual(['      10', '     100', '   11.0K', '   11.1K'])
+    expect(await cells(pane, 'since')).toEqual(['      11', '     110', '   12.1K', '   12.2K'])
+    expect(await textOf(pane, 'tokens:session:label')).toBe('This session')
+    expect(await textOf(pane, 'tokens:month:label')).toBe('November')
+    expect(await textOf(pane, 'tokens:since:label')).toBe(`Since ${S1_DAY} Oct`)
+    expect((await pane.find({ type: 'Text', text: /^ +in$/ }))?.props.dimColor).toBe(true)
+    expect((await pane.find({ type: 'Text', text: /^ +11\.1K$/ }))?.props.dimColor).toBe(false)
+    expect(await textOf(pane, 'tokens:parts')).toBe('cache = 1.1K write + 11.0K read')
+    expect((await pane.find({ type: 'Text', text: /^cache = / }))?.props.dimColor).toBe(true)
+    expect(await pane.find({ key: 'tokens:unsplit' })).toBeUndefined()
+  })
+
+  test('tokens_table_narrow_pane_falls_back', async ($, on) => {
+    const seen = await start($, on, TRANSCRIPTS())
+    await seen.clock.advance(1_000)
+    const pane = await mount($)
+
+    await pane.redraw({ ...PANE, bodyColumns: 40 })
+    const at40 = { head: await pane.find({ key: 'tokens:head' }), in: await pane.find({ key: 'tokens:session:in' }), session: await line(pane, 'session') }
+    const parts40 = await textOf(pane, 'tokens:parts')
+    await pane.redraw({ ...PANE, bodyColumns: 20 })
+
+    // 4 columns of 8 leave 8 for the label at 40: the 0.3.0 lines
+    expect(at40).toEqual({ head: undefined, in: undefined, session: 'This session11.1K' })
+    expect(parts40).toBe('out 110 · cache 1.1K write + 11.0K read')
+    expect(await pane.find({ key: 'tokens:head' })).toBeUndefined()
+    expect(await line(pane, 'since')).toBe(`Since ${S1_DAY} Oct12.2K`)
+    expect(await textOf(pane, 'tokens:parts')).toBe('out 110 · cache 1.1K write + 11.0K read')
+  })
+
+  test('tokens_month_split_kept', async ($, on) => {
+    const seen = await start($, on, TRANSCRIPTS())
+    await seen.clock.advance(1_000)
+
+    const kept = seen.stores.filter(x => x.key === 'tokens:/p').at(-1)?.value.files ?? {}
+
+    expect(kept['/p/s1.jsonl']?.monthParts).toEqual({ '2026-10': [1, 10, 100, 1000] })
+    expect(kept['/p/s2.jsonl']?.monthParts).toEqual({ '2026-11': [5, 50, 500, 5000] })
+    expect(kept['/p/s2/subagents/a1.jsonl']?.monthParts).toEqual({ '2026-11': [5, 50, 500, 5000] })
+    expect(kept['/p/s2.jsonl']?.months).toEqual({ '2026-11': 5555 })
+    expect(kept['/p/s2.jsonl']?.days).toEqual({ [dayKey('2026-11-20T12:00:00Z')]: 5555 })
+  })
+
+  test('tokens_upgrade_from_0_3_0_store', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const size = (path: string) => new TextEncoder().encode(seed.files?.[path] ?? '').length
+    const at = (iso: string) => Date.parse(iso)
+    const s0Days = { [dayKey('2026-10-01T12:00:00Z')]: 1_000_000 }
+    // 0.3.0's shape: months, days and ids, no month split; offsets where 0.3.0 stopped
+    seed.store = {
+      'tokens:/p': {
+        files: {
+          '/p/s0.jsonl': { offset: 500, first: at('2026-10-01T12:00:00Z'), parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 }, days: s0Days, ids: [] },
+          '/p/s1.jsonl': {
+            offset: size('/p/s1.jsonl'), first: at('2026-10-08T12:00:00Z'), parts: [1, 10, 100, 1000], months: { '2026-10': 1111 },
+            days: { [dayKey('2026-10-08T12:00:00Z')]: 1111 }, ids: [idHash('a')],
+          },
+          '/p/s2.jsonl': {
+            offset: new TextEncoder().encode(S2_DONE).length, first: at('2026-11-20T12:00:00Z'), parts: [5, 50, 500, 5000], months: { '2026-11': 5555 },
+            days: { [dayKey('2026-11-20T12:00:00Z')]: 5555 }, ids: [idHash('b'), idHash('c')],
+          },
+          '/p/s2/subagents/a1.jsonl': {
+            offset: size('/p/s2/subagents/a1.jsonl'), first: at('2026-11-21T12:00:00Z'), parts: [5, 50, 500, 5000], months: { '2026-11': 5555 },
+            days: { [dayKey('2026-11-21T12:00:00Z')]: 5555 }, ids: [idHash('e')],
+          },
+        },
+      },
+    }
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    for (const path of ['/p/s1.jsonl', '/p/s2.jsonl', '/p/s2/subagents/a1.jsonl']) expect(seen.reads.find(r => r.path === path)?.offset).toBe(0)
+    const writes = seen.stores.filter(x => x.key === 'tokens:/p')
+    expect(writes).toHaveLength(1) // once, when the recount ended
+    const kept = writes[0]?.value.files ?? {}
+    expect(kept['/p/s1.jsonl']?.parts).toEqual([1, 10, 100, 1000])
+    expect(kept['/p/s2.jsonl']?.parts).toEqual([5, 50, 500, 5000])
+    expect(kept['/p/s2.jsonl']?.monthParts).toEqual({ '2026-11': [5, 50, 500, 5000] })
+    expect(kept['/p/s2/subagents/a1.jsonl']?.parts).toEqual([5, 50, 500, 5000])
+    expect(kept['/p/s0.jsonl']).toMatchObject({ parts: [0, 0, 0, 1_000_000], months: { '2026-10': 1_000_000 }, days: s0Days, monthParts: {} })
+    expect(await cells(pane, 'session')).toEqual(['      10', '     100', '   11.0K', '   11.1K'])
+    expect(await cells(pane, 'month')).toEqual(['      10', '     100', '   11.0K', '   11.1K'])
+  })
+
+  test('tokens_upgrade_from_0_3_0_waits_for_a_whole_listing', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const end = (path: string) => new TextEncoder().encode(path === '/p/s2.jsonl' ? S2_DONE : (seed.files?.[path] ?? '')).length
+    seed.deny = ['/p/s2/subagents']
+    // 0.3.0's shape: s2 listed, a1 in the folder that won't list; no month split
+    seed.store = {
+      'tokens:/p': {
+        files: {
+          '/p/s2.jsonl': { offset: end('/p/s2.jsonl'), parts: [5, 50, 500, 5000], months: { '2026-11': 5555 }, days: {}, ids: [idHash('b'), idHash('c')] },
+          '/p/s2/subagents/a1.jsonl': { offset: end('/p/s2/subagents/a1.jsonl'), parts: [5, 50, 500, 5000], months: { '2026-11': 5555 }, days: {}, ids: [idHash('e')] },
+        },
+      },
+    }
+    const seen = await start($, on, seed)
+
+    await seen.clock.advance(1_000)
+
+    // not whole: none counted again (s2 not even read), none given a split
+    expect(seen.reads.some(r => r.path === '/p/s2.jsonl')).toBe(false)
+    const kept = seen.stores.filter(x => x.key === 'tokens:/p').at(-1)?.value.files
+    expect(kept?.['/p/s2.jsonl']?.monthParts).toBeUndefined()
+    expect(kept?.['/p/s2/subagents/a1.jsonl']?.monthParts).toBeUndefined()
+  })
+
+  test('tokens_month_with_an_unsplit_part', async ($, on) => {
+    const seed = TRANSCRIPTS()
+    const first = Date.parse('2026-11-02T12:00:00Z')
+    // gone from disk, kept by 0.3.0 with 1,000 tokens this month and no split
+    seed.store = {
+      'tokens:/p': {
+        files: { '/p/s0.jsonl': { offset: 500, first, parts: [0, 0, 0, 1000], months: { [`2026-11`]: 1000 }, days: { [dayKey(first)]: 1000 }, ids: [] } },
+      },
+    }
+    const seen = await start($, on, seed)
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // November: 11,110 split + s0's 1,000 unsplit
+    expect(await cells(pane, 'month')).toEqual(['      10', '     100', '   11.0K', '   12.1K'])
+    expect(await textOf(pane, 'tokens:unsplit')).toBe('1.0K of November not split (transcripts deleted)')
+    expect((await pane.find({ type: 'Text', text: /not split/ }))?.props.dimColor).toBe(true)
+  })
+
+  test('tokens_chart_fills_the_width', async ($, on) => {
+    // a reply on each of the last 30 days and on the 15th of each of the last 12 months: every slot drawn
+    const replies = [
+      ...Array.from({ length: 30 }, (_, i) => usage(`d${i}`, daysBack(i), [0, 0, 0, 100 + i])),
+      ...Array.from({ length: 12 }, (_, i) => usage(`m${i}`, new Date(2026, 10 - i, 15, 12).toISOString(), [0, 0, 0, 1000])),
+    ]
+    const seen = await start($, on, { transcript: '/p/s2.jsonl', files: { '/p/s2.jsonl': replies.map(l => `${l}\n`).join('') } })
+    await seen.clock.advance(1_000)
+    const pane = await mount($)
+    const bottom = async () => ((await chartRows(pane))[7] ?? '').replace(/ {2}0$/, '')
+
+    const at48 = runs(await bottom())
+    await pane.redraw({ ...PANE, bodyColumns: 100 })
+    const at100 = runs(await bottom())
+    await pane.redraw({ ...PANE, bodyColumns: 60 })
+    await pane.press({ key: 'tokens:view:months' })
+    const months60 = runs(await bottom())
+    const labels60 = await textOf(pane, 'tokens:chart:labels')
+    const widest = Math.max(...(await chartRows(pane)).map(r => r.length))
+
+    // bars of one width, every gap 1 or 2, the space after the last bar no wider than a gap
+    const spread = (r: { at: number; width: number }[], width: number) => {
+      const gaps = r.slice(1).map((x, i) => x.at - ((r[i]?.at ?? 0) + (r[i]?.width ?? 0)))
+      const last = r.at(-1) ?? { at: 0, width: 0 }
+      return { bars: r.length, widths: [...new Set(r.map(x => x.width))], first: r[0]?.at, gaps: [...new Set(gaps)].sort(), tail: width - last.at - last.width <= Math.max(...gaps) }
+    }
+    expect(spread(at48, 40)).toEqual({ bars: 20, widths: [1], first: 0, gaps: [1], tail: true })
+    expect(spread(at100, 92)).toEqual({ bars: 30, widths: [2], first: 0, gaps: [1, 2], tail: true })
+    expect(spread(months60, 52)).toEqual({ bars: 12, widths: [3], first: 0, gaps: [1, 2], tail: true })
+    // each month's 3 letters under its bar, December 2025 to November 2026
+    const names = months60.map(x => labels60.slice(x.at, x.at + 3))
+    expect(names).toEqual(['Dec', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov'])
+    expect(widest).toBeLessThanOrEqual(60)
+  })
+
+  test('tokens_chart_in_between_width', async ($, on) => {
+    const replies = Array.from({ length: 30 }, (_, i) => usage(`d${i}`, daysBack(i), [0, 0, 0, 100]))
+    const seen = await start($, on, { transcript: '/p/s2.jsonl', files: { '/p/s2.jsonl': replies.map(l => `${l}\n`).join('') } })
+    await seen.clock.advance(1_000)
+    const pane = await mount($)
+
+    await pane.redraw({ ...PANE, bodyColumns: 97 })
+
+    const r = runs(((await chartRows(pane))[7] ?? '').replace(/ {2}0$/, ''))
+    const gaps = new Set(r.slice(1).map((x, i) => x.at - ((r[i]?.at ?? 0) + (r[i]?.width ?? 0))))
+    expect(r).toHaveLength(30)
+    expect(new Set(r.map(x => x.width))).toEqual(new Set([1]))
+    expect(gaps).toEqual(new Set([1, 2]))
+    expect(r[0]?.at).toBe(0)
+    expect(r.at(-1)?.at).toBeGreaterThanOrEqual(86)
+  })
+
+  test('tokens_chart_y_axis', async ($, on) => {
+    const seen = await start($, on, TRANSCRIPTS())
+    await seen.clock.advance(1_000)
+
+    const pane = await mount($)
+
+    // 5,555 the max; half of it rounded, 2,778, on row 5; 0 on row 8; no label on the others
+    const axis = (await chartRows(pane)).map(r => r.slice(40))
+    expect(axis).toEqual(['  5.6K', '', '', '', '  2.8K', '', '', '  0'])
   })
 })

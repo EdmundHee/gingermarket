@@ -68,9 +68,18 @@ async function tick($: EngineInterface) {
  * One transcript's tally, kept in the store: where counting stopped, what it found before that (in all, by local month
  * and by local day), and the id hashes of every message it holds. A resumed session's transcript starts with copies of
  * its parent's rows, same ids; it keeps them too, so a session resumed from it after the parent is deleted still skips
- * them. No `days`: kept by 0.2.0, counted again once (see `tally`).
+ * them. `monthParts`: each local month's input, output, cache write and cache read. No `days`: kept by 0.2.0; no
+ * `monthParts`: kept by 0.2.0 or 0.3.0. Either is counted again once (see `tally`).
  */
-type Counted = { offset: number; first?: number; parts: number[]; months: Record<string, number>; days?: Record<string, number>; ids: number[] }
+type Counted = {
+  offset: number
+  first?: number
+  parts: number[]
+  months: Record<string, number>
+  days?: Record<string, number>
+  monthParts?: Record<string, number[]>
+  ids: number[]
+}
 /**
  * This project's tally. `files` by path, their counts kept for good: a transcript Claude Code deletes later still
  * counts, and only its ids go. `seen`: every kept file's ids. `transcript`: this session's. `isCounted`: every file read
@@ -160,10 +169,18 @@ function countLine(line: string, c: Counted, seen: Set<number>) {
   const n = parts.reduce((a, b) => a + b, 0)
   const month = monthOf(at)
   c.months[month] = (c.months[month] ?? 0) + n
+  const split = ((c.monthParts ??= {})[month] ??= [0, 0, 0, 0])
+  parts.forEach((p, i) => {
+    split[i] = (split[i] ?? 0) + p
+  })
   const days = (c.days ??= {})
   const day = dayOf(at)
   days[day] = (days[day] ?? 0) + n
 }
+
+const fresh = (): Counted => ({ offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, monthParts: {}, ids: [] })
+/** Kept by 0.2.0 or 0.3.0: counted again once the listing is whole. */
+const isOld = (c: Counted) => c.days === undefined || c.monthParts === undefined
 
 /** Counts every complete line in `bytes`; returns how many bytes that used (up to and with the last `\n`). */
 function countLines(bytes: Uint8Array, c: Counted, seen: Set<number>) {
@@ -245,18 +262,22 @@ async function tally($: EngineInterface) {
       // the first session in a new project: Claude Code makes the folder with the first reply
       error = (await $.fs.exists(dir).catch(() => true)) ? `Can't read ${dir}: ${why(err)}` : undefined
     }
-    // 0.2.0 kept no days. On a whole listing, a file still there is counted again from its start, every count of it
-    // emptied and its ids out of `seen`, so nothing counts twice; a gone one keeps its counts with no days (Claude Code
-    // deletes transcripts past cleanupPeriodDays, 30 by default, outside the day chart). Till the listing is whole, these
-    // files are not read: a copy in a folder that won't list would hold ids its original needs. Nothing is saved till
-    // the recount ends, so the 0.2.0 tally stays in the store through a quit or a read error.
-    // ponytail: a reply copied from a parent 0.2.0 saw deleted (its ids dropped) into a file counted again counts once
-    // more. No such parent in the stores at release (0 of 386 records gone); keep 0.2.0's ids of gone files if one shows
+    // 0.2.0 kept no days, 0.3.0 no month split. On a whole listing, a file still there is counted again from its start,
+    // every count of it emptied and its ids out of `seen`, so nothing counts twice; a gone one keeps its counts, with
+    // no days or split it lacks (Claude Code deletes transcripts past cleanupPeriodDays, 30 by default, outside the day
+    // chart). Till the listing is whole, these files are not read: a copy in a folder that won't list would hold ids
+    // its original needs. Nothing is saved till the recount ends, so the old tally stays in the store through a quit
+    // or a read error.
+    // ponytail: a reply copied from a parent deleted before this recount (its ids dropped) into a file counted again
+    // counts once more. Ceiling: those copied rows, once; keep the ids of gone files if that shows
     const listed = new Set(found.map(f => f.path))
-    const old = error === undefined ? Object.entries(t.files).filter(([, c]) => c.days === undefined) : []
+    const old = error === undefined ? Object.entries(t.files).filter(([, c]) => isOld(c)) : []
     for (const [path, c] of old) {
-      if (listed.has(path)) t.files[path] = { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
-      else c.days = {}
+      if (listed.has(path)) t.files[path] = fresh()
+      else {
+        c.days ??= {}
+        c.monthParts ??= {}
+      }
       carry.delete(path)
       t.isDirty = true
     }
@@ -266,8 +287,8 @@ async function tally($: EngineInterface) {
       t.isCounted = false
     }
     for (const { path, size } of found) {
-      const c = t.files[path] ?? { offset: 0, parts: [0, 0, 0, 0], months: {}, days: {}, ids: [] }
-      if (c.days === undefined) continue // 0.2.0's, waiting for a whole listing
+      const c = t.files[path] ?? fresh()
+      if (isOld(c)) continue // 0.2.0's or 0.3.0's, waiting for a whole listing
       let pending = carry.get(path) ?? new Uint8Array(0)
       // a file shorter than what was read was rewritten: read again from its start, its counts kept; its ids skip the
       // rows already counted, so only new ones add
@@ -345,6 +366,7 @@ function tokenTotals(t: Tokens, now: number) {
   const own = `${t.transcript.slice(0, -'.jsonl'.length)}/`
   const all = (c: Counted) => c.parts.reduce((a, b) => a + b, 0)
   const month = monthOf(now)
+  const mine = files.filter(([p]) => p === t.transcript || p.startsWith(own))
   const first = Math.min(...files.map(([, c]) => c.first ?? Number.POSITIVE_INFINITY))
   const sum = (by: (c: Counted) => Record<string, number> | undefined) => {
     const out: Record<string, number> = {}
@@ -354,10 +376,12 @@ function tokenTotals(t: Tokens, now: number) {
   return {
     days: sum(c => c.days),
     months: sum(c => c.months),
-    session: files.filter(([p]) => p === t.transcript || p.startsWith(own)).reduce((n, [, c]) => n + all(c), 0),
+    session: mine.reduce((n, [, c]) => n + all(c), 0),
     month: files.reduce((n, [, c]) => n + (c.months[month] ?? 0), 0),
     total: files.reduce((n, [, c]) => n + all(c), 0),
     parts: [0, 1, 2, 3].map(i => files.reduce((n, [, c]) => n + (c.parts[i] ?? 0), 0)),
+    sessionParts: [0, 1, 2, 3].map(i => mine.reduce((n, [, c]) => n + (c.parts[i] ?? 0), 0)),
+    monthParts: [0, 1, 2, 3].map(i => files.reduce((n, [, c]) => n + (c.monthParts?.[month]?.[i] ?? 0), 0)),
     first: Number.isFinite(first) ? first : undefined,
   }
 }
@@ -365,16 +389,35 @@ function tokenTotals(t: Tokens, now: number) {
 const BLOCKS = ' ▁▂▃▄▅▆▇█'
 const CHART_DAYS = 30
 const CHART_MONTHS = 12
+const CHART_ROWS = 8
 
 /**
- * The chart's 5 bar rows, top first: each value `round(value / max × 40)` eighths, one with any tokens at least `▁`,
- * `width` columns a bar and `gap` blank after it. `undefined` when every value is 0.
+ * Where `count` bars sit in `width` columns: bar `i` starts at `floor(i × width / count)`, so the columns left over go
+ * into the gaps (which differ by at most 1) and none stay empty at the right; each bar one column short of its share,
+ * at least `least` wide, so every gap is at least 1.
  */
-function barRows(values: number[], width: number, gap: number) {
+function slotsIn(width: number, count: number, least: number) {
+  const bar = Math.max(least, Math.floor(width / count) - 1)
+  return { bar, starts: Array.from({ length: count }, (_, i) => Math.floor((i * width) / count)) }
+}
+
+/**
+ * The chart's 8 bar rows, top first, each `width` wide: each value `round(value / max × 64)` eighths, one with any
+ * tokens at least `▁`, drawn `bar` columns wide from its start. `undefined` when every value is 0.
+ */
+function barRows(values: number[], width: number, { bar, starts }: ReturnType<typeof slotsIn>) {
   const max = Math.max(...values)
   if (!(max > 0)) return undefined
-  const eighths = values.map(v => (v > 0 ? Math.max(1, Math.round((v / max) * 40)) : 0))
-  const rows = [4, 3, 2, 1, 0].map(r => eighths.map(e => (BLOCKS[Math.min(8, Math.max(0, e - r * 8))] ?? ' ').repeat(width) + ' '.repeat(gap)).join(''))
+  const eighths = values.map(v => (v > 0 ? Math.max(1, Math.round((v / max) * CHART_ROWS * 8)) : 0))
+  const rows = Array.from({ length: CHART_ROWS }, (_, i) => {
+    const r = CHART_ROWS - 1 - i
+    const line = Array.from({ length: width }, () => ' ')
+    eighths.forEach((e, k) => {
+      const block = BLOCKS[Math.min(8, Math.max(0, e - r * 8))] ?? ' '
+      for (let x = starts[k] ?? 0; x < (starts[k] ?? 0) + bar && x < width; x++) line[x] = block
+    })
+    return line.join('')
+  })
   return { rows, max }
 }
 
@@ -868,12 +911,29 @@ export const register: Register = on => {
 
     // ---- tokens ----
 
+    /** A label and a total: the counts in a pane too narrow for the table. */
     const tokenLine = (key: string, label: string, value: string) => (
       <Box key={`tokens:${key}`} flexDirection="row" gap={1}>
-        <Box flexGrow={1}>
+        <Box key={`tokens:${key}:label`} flexGrow={1}>
           <Text wrap="truncate">{label}</Text>
         </Box>
-        <Text>{value}</Text>
+        <Box key={`tokens:${key}:total`} flexShrink={0}>
+          <Text>{value}</Text>
+        </Box>
+      </Box>
+    )
+    const COLUMNS = ['in', 'out', 'cache', 'total'] as const
+    /** One table row: its label, then each column's cell right-aligned to the column's width. */
+    const tableRow = (key: string, label: string, cells: string[], widths: number[], isDim: boolean) => (
+      <Box key={`tokens:${key}`} flexDirection="row">
+        <Box key={`tokens:${key}:label`} flexGrow={1}>
+          <Text dimColor={isDim} wrap="truncate">{label}</Text>
+        </Box>
+        {cells.map((cell, i) => (
+          <Box key={`tokens:${key}:${COLUMNS[i]}`} flexShrink={0}>
+            <Text dimColor={isDim}>{cell.padStart(widths[i] ?? 0)}</Text>
+          </Box>
+        ))}
       </Box>
     )
     const tokenCounts = () => {
@@ -885,45 +945,94 @@ export const register: Register = on => {
         )
       }
       const n = tokenTotals(tokens, now)
+      const monthName = MONTHS[new Date(now).getMonth()] ?? 'This month'
       const since = n.first === undefined ? 'Total' : `Since ${dayLabel(n.first)}`
       const [, out = 0, write = 0, cached = 0] = n.parts
+      // in, out, cache (write + read), total
+      const split = ([i = 0, o = 0, w = 0, r = 0]: number[], total: number) => [i, o, w + r, total].map(fmtTokens)
+      const rows = [
+        { key: 'session', label: 'This session', cells: split(n.sessionParts, n.session) },
+        { key: 'month', label: monthName, cells: split(n.monthParts, n.month) },
+        { key: 'since', label: since, cells: split(n.parts, n.total) },
+      ]
+      // each column 2 wider than its longest cell, at least 8; a label narrower than 12 leaves no room for the table
+      const widths = COLUMNS.map((_, i) => Math.max(8, ...rows.map(r => (r.cells[i]?.length ?? 0) + 2)))
+      const isTable = e.props.bodyColumns - widths.reduce((a, b) => a + b, 0) >= 12
+      // a deleted transcript's tokens this month with no split kept (0.3.0 kept none): the split sums under the total
+      const unsplit = n.month - n.monthParts.reduce((a, b) => a + b, 0)
       return (
         <Box flexDirection="column">
-          {tokenLine('session', 'This session', fmtTokens(n.session))}
-          {tokenLine('month', MONTHS[new Date(now).getMonth()] ?? 'This month', fmtTokens(n.month))}
-          {tokenLine('since', since, fmtTokens(n.total))}
-          <Box key="tokens:parts">
-            <Text dimColor wrap="truncate">{`out ${fmtTokens(out)} · cache ${fmtTokens(write)} write + ${fmtTokens(cached)} read`}</Text>
-          </Box>
+          {isTable ? (
+            [
+              tableRow('head', '', [...COLUMNS], widths, true),
+              ...rows.map(r => tableRow(r.key, r.label, r.cells, widths, false)),
+              <Box key="tokens:parts">
+                <Text dimColor wrap="truncate">{`cache = ${fmtTokens(write)} write + ${fmtTokens(cached)} read`}</Text>
+              </Box>,
+              unsplit > 0 && (
+                <Box key="tokens:unsplit">
+                  <Text dimColor wrap="truncate">{`${fmtTokens(unsplit)} of ${monthName} not split (transcripts deleted)`}</Text>
+                </Box>
+              ),
+            ]
+          ) : (
+            [
+              ...rows.map(r => tokenLine(r.key, r.label, r.cells[3] ?? '')),
+              <Box key="tokens:parts">
+                <Text dimColor wrap="truncate">{`out ${fmtTokens(out)} · cache ${fmtTokens(write)} write + ${fmtTokens(cached)} read`}</Text>
+              </Box>,
+            ]
+          )}
           {chart(n)}
         </Box>
       )
     }
     /**
-     * Days: the last 30 days, one column each; Months: the last 12, 2 columns and a gap each. Fewer in a narrow pane,
-     * every row inside it (the widest axis label is 6); none under 20 columns.
+     * Days: the last 30 days, a bar each (1 column or more) and a gap; Months: the last 12, a bar each (2 columns or
+     * more) and a gap. The bars spread over the pane's width less the axis; fewer of them in a narrow pane, every row
+     * inside it; none under 20 columns.
      */
     const chart = (n: ReturnType<typeof tokenTotals>) => {
       const cols = e.props.bodyColumns
       if (cols < 20) return null
       const isDays = chartView === 'days'
-      const fit = (count: number) => {
+      const fit = (width: number) => {
+        const count = isDays ? Math.min(CHART_DAYS, Math.floor(width / 2)) : Math.min(CHART_MONTHS, Math.floor(width / 3))
         const slots = isDays ? lastDays(now, count) : lastMonths(now, count)
-        const bars = isDays ? barRows(slots.map(at => n.days[dayOf(at)] ?? 0), 1, 0) : barRows(slots.map(at => n.months[monthOf(at)] ?? 0), 2, 1)
-        return { count, slots, bars, over: bars === undefined ? 0 : count * (isDays ? 1 : 3) + 2 + fmtTokens(bars.max).length - cols }
+        const place = slotsIn(width, count, isDays ? 1 : 2)
+        const values = slots.map(at => (isDays ? n.days[dayOf(at)] : n.months[monthOf(at)]) ?? 0)
+        const bars = barRows(values, width, place)
+        return { width, count, slots, place, bars, over: bars === undefined ? 0 : 2 + fmtTokens(bars.max).length - 8 }
       }
       // 8 columns kept for the axis: 2 + the widest label under 100B (6). A bigger peak gives up the columns it needs
       // once: the smaller window's peak is no higher, so its label is no wider
-      let drawn = fit(isDays ? Math.min(CHART_DAYS, cols - 8) : Math.min(CHART_MONTHS, Math.floor((cols - 8) / 3)))
-      if (drawn.over > 0) drawn = fit(drawn.count - (isDays ? drawn.over : Math.ceil(drawn.over / 3)))
-      const { count, slots, bars } = drawn
+      let drawn = fit(cols - 8)
+      if (drawn.over > 0) drawn = fit(cols - 8 - drawn.over)
+      const { width, count, slots, place, bars } = drawn
+      const end = (place.starts.at(-1) ?? 0) + place.bar // where the last bar ends
       const first = dayLabel(slots[0] ?? now)
       const today = dayLabel(now)
+      // months: each month's name (3 letters when every slot has room, else its initial) under its bar
+      const monthLabels = () => {
+        const line = Array.from({ length: width }, () => ' ')
+        const wide = Math.floor(width / count) >= 4
+        slots.forEach((at, k) => {
+          const name = MONTHS[new Date(at).getMonth()] ?? ''
+          ;[...(wide ? name.slice(0, 3) : name.slice(0, 1))].forEach((ch, j) => {
+            line[(place.starts[k] ?? 0) + j] = ch
+          })
+        })
+        return line.join('').trimEnd()
+      }
+      // days: the first day under the first bar, today ending under the last; today only when both don't fit
       const labels = !isDays
-        ? slots.map(at => MONTHS[new Date(at).getMonth()]?.[0] ?? '').join('  ')
-        : count < 13
-          ? today.padStart(count)
-          : `${first}${' '.repeat(count - first.length - today.length)}${today}`
+        ? monthLabels()
+        : first.length + 1 + today.length > end
+          ? today.padStart(end)
+          : `${first}${' '.repeat(end - first.length - today.length)}${today}`
+      // the axis: the peak at the top, half of it (whole tokens) on row 5, where the bars' halfway line is, 0 at the foot
+      const axis = (i: number) =>
+        bars === undefined ? '' : i === 0 ? fmtTokens(bars.max) : i === 4 ? fmtTokens(Math.round(bars.max / 2)) : i === CHART_ROWS - 1 ? '0' : ''
       return (
         <Box key="tokens:chart" flexDirection="column" marginTop={1}>
           <Box key="tokens:view" flexDirection="row" gap={2}>
@@ -944,8 +1053,7 @@ export const register: Register = on => {
               ...bars.rows.map((row, i) => (
                 <Box key={`tokens:chart:${i + 1}`} flexDirection="row">
                   <Text color={TITLE.tokens}>{row}</Text>
-                  {i === 0 && <Text dimColor>{`  ${fmtTokens(bars.max)}`}</Text>}
-                  {i === 4 && <Text dimColor>{'  0'}</Text>}
+                  {axis(i) !== '' && <Text dimColor>{`  ${axis(i)}`}</Text>}
                 </Box>
               )),
               <Box key="tokens:chart:labels">
